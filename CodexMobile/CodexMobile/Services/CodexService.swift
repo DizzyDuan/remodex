@@ -304,7 +304,7 @@ struct AssistantRevertStateCacheEntry {
 @MainActor
 @Observable
 final class CodexService {
-    static let minimumSupportedBridgePackageVersion = "1.3.5"
+    static let minimumSupportedBridgePackageVersion = "1.3.9"
 
     // --- Public state ---------------------------------------------------------
 
@@ -443,7 +443,7 @@ final class CodexService {
     @ObservationIgnored var messagePersistenceDebounceTask: Task<Void, Never>?
     // Coalesces high-frequency assistant deltas before they mutate observed timeline state.
     @ObservationIgnored var pendingAssistantDeltaByStreamID: [String: String] = [:]
-    @ObservationIgnored var pendingAssistantDeltaContextByStreamID: [String: (threadId: String, turnId: String, itemId: String?)] = [:]
+    @ObservationIgnored var pendingAssistantDeltaContextByStreamID: [String: (threadId: String, turnId: String, itemId: String?, assistantPhase: String?)] = [:]
     @ObservationIgnored var pendingAssistantDeltaStreamOrder: [String] = []
     @ObservationIgnored var pendingAssistantDeltaFlushTask: Task<Void, Never>?
     let assistantDeltaBatchIntervalNanoseconds: UInt64 = 50_000_000
@@ -515,7 +515,13 @@ final class CodexService {
         if let hostCapabilities = gptAccountSnapshot.hostCapabilities {
             return hostCapabilities
         }
-        return preferredTrustedMacRecord == nil ? CodexBridgeHostCapabilities() : .legacyMacOS
+        // Older bridges did not report capabilities; only apply that compatibility
+        // fallback when the remembered host is known to be macOS.
+        guard preferredTrustedMacRecord != nil,
+              bridgeHostPlatform == .macOS else {
+            return CodexBridgeHostCapabilities()
+        }
+        return .legacyMacOS
     }
     var supportsDesktopAppHandoff: Bool {
         bridgeHostCapabilities.desktopHandoff
@@ -567,6 +573,7 @@ final class CodexService {
     var aiChangeSetsByID: [String: AIChangeSet] = [:]
     var aiChangeSetIDByTurnID: [String: String] = [:]
     var aiChangeSetIDByAssistantMessageID: [String: String] = [:]
+    @ObservationIgnored var workspaceCheckpointCopyTaskByTurnID: [String: Task<Void, Never>] = [:]
     // Keeps hot-path thread lookups O(1) instead of rescanning the full sidebar list.
     @ObservationIgnored var threadByID: [String: CodexThread] = [:]
     @ObservationIgnored var threadIndexByID: [String: Int] = [:]

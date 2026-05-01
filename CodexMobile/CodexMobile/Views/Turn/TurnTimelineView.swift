@@ -13,6 +13,7 @@ struct AssistantBlockAccessoryState: Equatable {
     let blockDiffText: String?
     let blockDiffEntries: [TurnFileChangeSummaryEntry]?
     let blockRevertPresentation: AssistantRevertPresentation?
+    let blockRevertMessage: CodexMessage?
 
     func replacingCopyText(_ copyText: String?) -> AssistantBlockAccessoryState {
         AssistantBlockAccessoryState(
@@ -20,7 +21,8 @@ struct AssistantBlockAccessoryState: Equatable {
             showsRunningIndicator: showsRunningIndicator,
             blockDiffText: blockDiffText,
             blockDiffEntries: blockDiffEntries,
-            blockRevertPresentation: blockRevertPresentation
+            blockRevertPresentation: blockRevertPresentation,
+            blockRevertMessage: blockRevertMessage
         )
     }
 }
@@ -606,7 +608,6 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                         }
                     }
                     .frame(width: viewport.size.width)
-                    .clipped()
                     .defaultScrollAnchor(.bottom, for: .initialOffset)
                     .defaultScrollAnchor(.bottom, for: .sizeChanges)
                     .scrollDismissesKeyboard(.interactively)
@@ -1270,10 +1271,13 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             let blockDiffText = blockDiffPresentation?.bodyText
             let blockDiffEntries = blockDiffPresentation?.entries
 
-            // Use the last assistant revert presentation in this block.
+            // Keep the source assistant row with its presentation so visible system rows can invoke the right change set.
             let blockRevert = messages[blockStart...blockEnd]
                 .reversed()
-                .compactMap { revertStatesByMessageID[$0.id] }
+                .compactMap { message -> (presentation: AssistantRevertPresentation, message: CodexMessage)? in
+                    guard let presentation = revertStatesByMessageID[message.id] else { return nil }
+                    return (presentation, message)
+                }
                 .first
 
             if copyText != nil || showsRunningIndicator || blockDiffEntries != nil || blockRevert != nil {
@@ -1282,7 +1286,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                     showsRunningIndicator: showsRunningIndicator,
                     blockDiffText: blockDiffText,
                     blockDiffEntries: blockDiffEntries,
-                    blockRevertPresentation: blockRevert
+                    blockRevertPresentation: blockRevert?.presentation,
+                    blockRevertMessage: blockRevert?.message
                 )
             }
             i = blockStart - 1
@@ -1302,6 +1307,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         guard !collapsedFinalMessageIDs.isEmpty else {
             return statesByMessageID
         }
+        let hiddenMessageIDs = TurnTimelineRenderProjection.collapsedPreviousMessageIDs(
+            in: messages,
+            completedTurnIDs: completedTurnIDs
+        )
 
         var updated = statesByMessageID
         for finalIndex in messages.indices where collapsedFinalMessageIDs.contains(messages[finalIndex].id) {
@@ -1309,6 +1318,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             let sourceState = updated[finalMessage.id] ?? collapsedBlockAccessoryState(
                 forFinalIndex: finalIndex,
                 messages: messages,
+                hiddenMessageIDs: hiddenMessageIDs,
                 statesByMessageID: updated
             )
             guard let sourceState else { continue }
@@ -1324,6 +1334,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     private static func collapsedBlockAccessoryState(
         forFinalIndex finalIndex: Int,
         messages: [CodexMessage],
+        hiddenMessageIDs: Set<String>,
         statesByMessageID: [String: AssistantBlockAccessoryState]
     ) -> AssistantBlockAccessoryState? {
         let finalMessage = messages[finalIndex]
@@ -1341,6 +1352,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         for index in stride(from: blockEnd, through: blockStart, by: -1) {
             let candidate = messages[index]
             guard candidate.id != finalMessage.id else { continue }
+            guard hiddenMessageIDs.contains(candidate.id) else { continue }
             if let finalTurnID, normalizedTurnID(candidate.turnId) != finalTurnID {
                 continue
             }

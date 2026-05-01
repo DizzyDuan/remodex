@@ -183,9 +183,14 @@ extension CodexService {
         }
 
         let initialThreadId = try await resolveThreadID(threadId)
+        let effectiveCollaborationMode = collaborationModeForOutgoingTurn(
+            threadId: initialThreadId,
+            requestedMode: collaborationMode,
+            preserveExisting: preservePlanSessionState
+        )
         preparePlanSessionForStart(
             threadId: initialThreadId,
-            collaborationMode: collaborationMode,
+            collaborationMode: effectiveCollaborationMode,
             preserveExisting: preservePlanSessionState
         )
 
@@ -206,7 +211,7 @@ extension CodexService {
                     fileMentions: fileMentions,
                     to: continuationThread.id,
                     shouldAppendUserMessage: shouldAppendUserMessage,
-                    collaborationMode: collaborationMode
+                    collaborationMode: effectiveCollaborationMode
                 )
                 activeThreadId = continuationThread.id
                 lastErrorMessage = nil
@@ -223,7 +228,7 @@ extension CodexService {
                 fileMentions: fileMentions,
                 to: initialThreadId,
                 shouldAppendUserMessage: shouldAppendUserMessage,
-                collaborationMode: collaborationMode
+                collaborationMode: effectiveCollaborationMode
             )
         } catch {
             if shouldTreatAsThreadNotFound(error) {
@@ -248,7 +253,7 @@ extension CodexService {
                     fileMentions: fileMentions,
                     to: continuationThread.id,
                     shouldAppendUserMessage: shouldAppendUserMessage,
-                    collaborationMode: collaborationMode
+                    collaborationMode: effectiveCollaborationMode
                 )
                 activeThreadId = continuationThread.id
                 lastErrorMessage = nil
@@ -1078,6 +1083,10 @@ extension CodexService {
         activeThreadId = threadId
         markThreadAsRunning(threadId)
         setProtectedRunningFallback(true, for: threadId)
+        let messageStartCheckpointTask = scheduleMessageStartWorkspaceCheckpointIfPossible(
+            threadId: threadId,
+            messageId: pendingMessageId
+        )
 
         var includeStructuredSkillItems = supportsStructuredSkillInput && !skillMentions.isEmpty
         var includeStructuredMentionItems = supportsStructuredMentionInput && !mentionMentions.isEmpty
@@ -1106,15 +1115,26 @@ extension CodexService {
                     collaborationMode: effectiveCollaborationMode,
                     includeServiceTier: includesServiceTier
                 )
+                // The pre-turn snapshot must settle before the runtime can mutate files.
+                if let messageStartCheckpointTask {
+                    await messageStartCheckpointTask.value
+                }
                 let response = try await sendRequestWithSandboxFallback(
                     method: "turn/start",
                     baseParams: requestParams
                 )
-                handleSuccessfulTurnStartResponse(
+                let resolvedTurnID = handleSuccessfulTurnStartResponse(
                     response,
                     pendingMessageId: pendingMessageId,
                     threadId: threadId
                 )
+                if let resolvedTurnID {
+                    scheduleMessageStartWorkspaceCheckpointCopyIfPossible(
+                        threadId: threadId,
+                        messageId: pendingMessageId,
+                        turnId: resolvedTurnID
+                    )
+                }
                 scheduleAutomaticThreadTitleGenerationIfNeeded(
                     seed: automaticTitleSeed,
                     threadId: threadId,
@@ -1295,9 +1315,13 @@ extension CodexService {
         collaborationMode: CodexCollaborationModeKind? = nil
     ) async throws {
         let normalizedThreadID = normalizedInterruptIdentifier(threadId) ?? threadId
+        let effectiveRequestedCollaborationMode = collaborationModeForOutgoingTurn(
+            threadId: normalizedThreadID,
+            requestedMode: collaborationMode
+        )
         preparePlanSessionForSteer(
             threadId: normalizedThreadID,
-            collaborationMode: collaborationMode
+            collaborationMode: effectiveRequestedCollaborationMode
         )
         let pendingMessageId = shouldAppendUserMessage
             ? appendUserMessage(
@@ -1326,13 +1350,13 @@ extension CodexService {
         var includeStructuredSkillItems = supportsStructuredSkillInput && !skillMentions.isEmpty
         var includeStructuredMentionItems = supportsStructuredMentionInput && !mentionMentions.isEmpty
         var imageURLKey = "url"
-        var effectiveCollaborationMode = supportsTurnCollaborationMode ? collaborationMode : nil
+        var effectiveCollaborationMode = supportsTurnCollaborationMode ? effectiveRequestedCollaborationMode : nil
         var currentExpectedTurnID = initialTurnID
         var didRetryWithRefreshedTurnID = false
 
-        if collaborationMode != nil, effectiveCollaborationMode == nil {
+        if effectiveRequestedCollaborationMode != nil, effectiveCollaborationMode == nil {
             debugRuntimeLog(
-                "turn/steer dropping collaborationMode requested=\(collaborationMode?.rawValue ?? "") thread=\(normalizedThreadID) supportsTurnCollaborationMode=\(supportsTurnCollaborationMode)"
+                "turn/steer dropping collaborationMode requested=\(effectiveRequestedCollaborationMode?.rawValue ?? "") thread=\(normalizedThreadID) supportsTurnCollaborationMode=\(supportsTurnCollaborationMode)"
             )
         }
 
@@ -1750,6 +1774,26 @@ extension CodexService {
         currentPlanSessionSource(for: threadId) == .compatibilityFallback
     }
 
+    // App-server keeps collaboration mode sticky when the field is omitted, so
+    // a normal send from an active plan thread must explicitly restore default.
+    private func collaborationModeForOutgoingTurn(
+        threadId: String,
+        requestedMode: CodexCollaborationModeKind?,
+        preserveExisting: Bool = false
+    ) -> CodexCollaborationModeKind? {
+        if let requestedMode {
+            return requestedMode
+        }
+
+        guard !preserveExisting,
+              supportsTurnCollaborationMode,
+              currentPlanSessionSource(for: threadId) != nil else {
+            return nil
+        }
+
+        return .default
+    }
+
     func developerInstructions(for mode: CodexCollaborationModeKind) -> String? {
         switch mode {
         case .plan:
@@ -1843,11 +1887,12 @@ extension CodexService {
     }
 
     // Handles successful turn/start bookkeeping for both primary and fallback payload schemas.
+    @discardableResult
     func handleSuccessfulTurnStartResponse(
         _ response: RPCMessage,
         pendingMessageId: String,
         threadId: String
-    ) {
+    ) -> String? {
         let turnID = extractTurnID(from: response.result)
         let resolvedTurnID = turnID ?? activeTurnIdByThread[threadId]
         let deliveryState: CodexMessageDeliveryState = (resolvedTurnID == nil) ? .pending : .confirmed
@@ -1871,6 +1916,8 @@ extension CodexService {
             threads[index].syncState = .live
             threads = sortThreads(threads)
         }
+
+        return resolvedTurnID
     }
 
     // Applies steer failure bookkeeping for optimistic user rows without adding an extra system error card.

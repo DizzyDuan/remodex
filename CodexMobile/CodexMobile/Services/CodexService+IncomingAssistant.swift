@@ -9,6 +9,7 @@ import Foundation
 private struct AssistantEventIdentity {
     let turnId: String?
     let itemId: String?
+    let phase: String?
 }
 
 private struct AssistantEventContext {
@@ -46,6 +47,7 @@ extension CodexService {
             threadId: context.threadId,
             turnId: turnId,
             itemId: context.identity.itemId,
+            assistantPhase: context.identity.phase,
             delta: delta
         )
     }
@@ -95,10 +97,17 @@ extension CodexService {
                 paramsObject: paramsObject,
                 eventObject: eventObject
             ) else { return }
+            let turnId = assistantCompletionTurnId(
+                context: context,
+                paramsObject: paramsObject,
+                eventObject: eventObject,
+                itemObject: nil
+            )
             completeAssistantMessage(
                 threadId: context.threadId,
-                turnId: context.identity.turnId,
+                turnId: turnId,
                 itemId: context.identity.itemId,
+                assistantPhase: context.identity.phase,
                 text: text
             )
             return
@@ -137,6 +146,7 @@ extension CodexService {
                 threadId: context.threadId,
                 turnId: context.identity.turnId,
                 itemId: context.identity.itemId,
+                assistantPhase: context.identity.phase,
                 text: text
             )
             return
@@ -157,10 +167,17 @@ extension CodexService {
             eventObject: eventObject,
             itemObject: itemObject
         ) else { return }
+        let turnId = assistantCompletionTurnId(
+            context: context,
+            paramsObject: paramsObject,
+            eventObject: eventObject,
+            itemObject: itemObject
+        )
         completeAssistantMessage(
             threadId: context.threadId,
-            turnId: context.identity.turnId,
+            turnId: turnId,
             itemId: context.identity.itemId,
+            assistantPhase: context.identity.phase,
             text: text
         )
     }
@@ -248,7 +265,8 @@ extension CodexService {
             beginAssistantMessage(
                 threadId: context.threadId,
                 turnId: turnId,
-                itemId: context.identity.itemId
+                itemId: context.identity.itemId,
+                assistantPhase: context.identity.phase
             )
             return
         }
@@ -272,7 +290,8 @@ extension CodexService {
         beginAssistantMessage(
             threadId: context.threadId,
             turnId: turnId,
-            itemId: context.identity.itemId
+            itemId: context.identity.itemId,
+            assistantPhase: context.identity.phase
         )
     }
 }
@@ -308,7 +327,15 @@ private extension CodexService {
             eventObject: eventObject,
             itemObject: itemObject
         )
-        return AssistantEventIdentity(turnId: turnId, itemId: itemId)
+        return AssistantEventIdentity(
+            turnId: turnId,
+            itemId: itemId,
+            phase: extractAssistantPhase(
+                paramsObject: paramsObject,
+                eventObject: eventObject,
+                itemObject: itemObject
+            )
+        )
     }
 
     // Resolves assistant event context and preserves turn->thread mapping when available.
@@ -337,6 +364,49 @@ private extension CodexService {
         }
 
         return AssistantEventContext(threadId: threadId, identity: identity)
+    }
+
+    // Codex app-server can emit final_answer text before task_complete without
+    // repeating turnId; bind that terminal text to the active turn for this thread.
+    func assistantCompletionTurnId(
+        context: AssistantEventContext,
+        paramsObject: IncomingParamsObject,
+        eventObject: IncomingParamsObject?,
+        itemObject: IncomingParamsObject?
+    ) -> String? {
+        if let turnId = context.identity.turnId {
+            return turnId
+        }
+        guard isFinalAnswerPhase(paramsObject: paramsObject, eventObject: eventObject, itemObject: itemObject) else {
+            return nil
+        }
+        return activeTurnIdByThread[context.threadId]
+    }
+
+    func isFinalAnswerPhase(
+        paramsObject: IncomingParamsObject,
+        eventObject: IncomingParamsObject?,
+        itemObject: IncomingParamsObject?
+    ) -> Bool {
+        let phase = extractAssistantPhase(
+            paramsObject: paramsObject,
+            eventObject: eventObject,
+            itemObject: itemObject
+        )
+        return phase == "final_answer"
+    }
+
+    func extractAssistantPhase(
+        paramsObject: IncomingParamsObject,
+        eventObject: IncomingParamsObject?,
+        itemObject: IncomingParamsObject?
+    ) -> String? {
+        normalizedAssistantPhase(firstNonEmptyString([
+            paramsObject["phase"]?.stringValue,
+            eventObject?["phase"]?.stringValue,
+            itemObject?["phase"]?.stringValue,
+            paramsObject["event"]?.objectValue?["phase"]?.stringValue,
+        ]))
     }
 
     // Checks if an incoming item payload should render as assistant prose.

@@ -60,6 +60,8 @@ struct ContentView: View {
     @State private var activeSidebarGestureDebugID: Int?
     @State private var lastSidebarGestureLogBucket: Int?
     @State private var sidebarGestureAutoCommitted = false
+    @State private var sidebarSelectionSuppressedUntil: Date?
+    @State private var isOpeningNewChatFromSidebar = false
     @AppStorage("codex.hasSeenOnboarding") private var hasSeenOnboarding = false
     @AppStorage("codex.whatsNew.lastPresentedVersion") private var lastPresentedWhatsNewVersion = ""
 
@@ -70,6 +72,7 @@ struct ContentView: View {
     private let whatsNewPresentationDelayNanoseconds: UInt64 = 30_000_000_000
     private let sidebarGestureLogBucketWidth: CGFloat = 40
     private let sidebarSwipeCommitDistance: CGFloat = 30
+    private let sidebarSelectionSuppressionDuration: TimeInterval = 0.35
     private let whatsNewReleaseVersion = "1.1"
     private static let sidebarSpring = Animation.spring(response: 0.35, dampingFraction: 0.85)
     private static var isSidebarDebugLoggingEnabled: Bool { false }
@@ -364,6 +367,9 @@ struct ContentView: View {
                         showsInlineCloseButton: shouldUseFullWidthSidebar,
                         isVisible: sidebarVisible,
                         onClose: { closeSidebar() },
+                        onNewChatCreationStateChange: { isCreating in
+                            setNewChatOpeningState(isCreating)
+                        },
                         onOpenThread: { thread in
                             openThreadFromSidebar(thread)
                         }
@@ -427,7 +433,14 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if let thread = selectedThread {
+        if isOpeningNewChatFromSidebar {
+            NewChatOpeningStateView()
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        hamburgerButton
+                    }
+                }
+        } else if let thread = selectedThread {
             TurnView(
                 thread: thread,
                 isWakingMacDisplayRecovery: isWakingSavedMacDisplay
@@ -563,7 +576,7 @@ struct ContentView: View {
         }
 
         hasAttemptedAutomaticWakeSavedMacDisplay = true
-        await performSavedMacDisplayWakeAttempt()
+        await performSavedMacDisplayWakeAttempt(cancelAutoReconnectBeforeWake: false)
     }
 
     // Keeps foreground reconnect and the one-shot wake fallback in the same guarded path.
@@ -587,24 +600,29 @@ struct ContentView: View {
     // Uses a temporary bridge request to wake display sleep, then unlocks the manual button only if that fails.
     private func wakeSavedMacDisplay() {
         Task { @MainActor in
-            await performSavedMacDisplayWakeAttempt()
+            await performSavedMacDisplayWakeAttempt(cancelAutoReconnectBeforeWake: true)
         }
     }
 
     // Sends one wake pulse over the best remembered pairing path without hiding the manual wake affordance.
-    private func performSavedMacDisplayWakeAttempt() async {
+    private func performSavedMacDisplayWakeAttempt(cancelAutoReconnectBeforeWake: Bool) async {
         guard codex.supportsDisplayWake, !isWakingSavedMacDisplay else { return }
         isWakingSavedMacDisplay = true
 
         defer { isWakingSavedMacDisplay = false }
 
         do {
-            await viewModel.stopAutoReconnectForManualRetry(codex: codex)
+            if cancelAutoReconnectBeforeWake {
+                await viewModel.stopAutoReconnectForManualRetry(codex: codex)
+            }
             let handoffService = DesktopHandoffService(codex: codex)
             try await handoffService.wakeDisplay()
+            if codex.isConnected {
+                codex.schedulePostConnectSyncPass(preferredThreadId: codex.activeThreadId)
+            }
         } catch {
             // Wake failures are expected when the Mac has already gone past display sleep,
-            // so do not surface them as sticky composer errors inside the active chat.
+            // so keep automatic reconnect alive instead of surfacing sticky composer errors.
         }
     }
 
@@ -658,6 +676,7 @@ struct ContentView: View {
                     finishGesture(open: true)
                 } else {
                     guard isClosingSidebarGesture(value) else { return }
+                    suppressSidebarSelectionBriefly()
                     beginSidebarGestureDebugIfNeeded(kind: "close", startX: value.startLocation.x)
                     logSidebarGestureProgressIfNeeded(translation: -value.translation.width)
                     guard -value.translation.width >= sidebarSwipeCommitDistance else { return }
@@ -700,6 +719,7 @@ struct ContentView: View {
                         resetSidebarGestureDebug()
                         return
                     }
+                    suppressSidebarSelectionBriefly()
                     debugSidebarLog(
                         "gesture #\(activeSidebarGestureDebugID ?? 0) end kind=close "
                             + "translation=\(Int(-value.translation.width)) predicted=\(Int(-value.predictedEndTranslation.width)) "
@@ -738,6 +758,12 @@ struct ContentView: View {
     }
 
     private func openThreadFromSidebar(_ thread: CodexThread) {
+        guard !shouldSuppressSidebarSelection() else {
+            debugSidebarLog("openThread suppressed by close swipe id=\(thread.id)")
+            return
+        }
+
+        isOpeningNewChatFromSidebar = false
         if isSidebarOpen || sidebarDragOffset > 0 {
             closeSidebar()
         }
@@ -757,6 +783,28 @@ struct ContentView: View {
             }
 
             codex.requestImmediateActiveThreadSync(threadId: thread.id)
+        }
+    }
+
+    // Prevents a close-swipe release from also activating whichever sidebar row was under the finger.
+    private func suppressSidebarSelectionBriefly() {
+        sidebarSelectionSuppressedUntil = Date().addingTimeInterval(sidebarSelectionSuppressionDuration)
+    }
+
+    private func shouldSuppressSidebarSelection() -> Bool {
+        guard let suppressedUntil = sidebarSelectionSuppressedUntil else { return false }
+        if Date() < suppressedUntil {
+            return true
+        }
+        sidebarSelectionSuppressedUntil = nil
+        return false
+    }
+
+    private func setNewChatOpeningState(_ isOpening: Bool) {
+        isOpeningNewChatFromSidebar = isOpening
+        if isOpening {
+            selectedThread = nil
+            codex.activeThreadId = nil
         }
     }
 
@@ -826,15 +874,16 @@ struct ContentView: View {
         setSidebar(open: open)
     }
 
-    // Forces UIKit-backed inputs like the composer text view to resign before the drawer settles open.
+    // Forces UIKit-backed inputs like the composer/search text views to resign before the drawer moves.
     private func setSidebar(open: Bool) {
         debugSidebarLog(
             "setSidebar open=\(open) prewarmed=\(isSidebarPrewarmed) "
                 + "visible=\(sidebarVisible) revealWidth=\(Int(sidebarRevealWidth))"
         )
-        if open {
-            dismissActiveKeyboard()
+        if !open {
+            isSearchActive = false
         }
+        dismissActiveKeyboard()
         withAnimation(Self.sidebarSpring) {
             isSidebarOpen = open
             sidebarDragOffset = 0
@@ -1374,6 +1423,8 @@ struct ContentView: View {
 
     // Keeps selected thread coherent with server list updates.
     private func syncSelectedThread(with threads: [CodexThread]) {
+        guard !isOpeningNewChatFromSidebar else { return }
+
         if let selected = selectedThread,
            !threads.contains(where: { $0.id == selected.id }) {
             if codex.activeThreadId == selected.id {
@@ -1474,6 +1525,29 @@ struct ContentView: View {
         }
 
         codex.forgetTrustedMac(deviceId: deviceId)
+    }
+}
+
+private struct NewChatOpeningStateView: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.regular)
+
+            VStack(spacing: 4) {
+                Text("Starting new chat...")
+                    .font(AppFont.headline())
+                    .foregroundStyle(.primary)
+
+                Text("Preparing an empty conversation.")
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .navigationTitle("New Chat")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
