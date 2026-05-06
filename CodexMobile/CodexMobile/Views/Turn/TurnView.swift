@@ -2087,7 +2087,7 @@ private struct RuntimeDebugLogSheet: View {
 
 private extension TurnView {
     var usesPadDiffPresentation: Bool {
-        horizontalSizeClass == .regular
+        PadPresentationStyle.usesPadPresentation(horizontalSizeClass: horizontalSizeClass)
     }
 
     // Sends repo-wide diffs to a full-screen iPad surface while preserving sheet behavior in compact layouts.

@@ -43,6 +43,7 @@ struct ContentView: View {
     @State private var manualPairingErrorMessage: String?
     @State private var isResolvingManualPairingCode = false
     @State private var isSearchActive = false
+    @State private var preferredSplitCompactColumn = NavigationSplitViewColumn.detail
     @State private var isRetryingBridgeUpdate = false
     @State private var isPreparingManualScanner = false
     @State private var isWakingSavedMacDisplay = false
@@ -100,6 +101,7 @@ struct ContentView: View {
             }
             .onChange(of: showSettings) { _, show in
                 if show {
+                    preferredSplitCompactColumn = .detail
                     navigationPath.append("settings")
                     showSettings = false
                 }
@@ -245,7 +247,7 @@ struct ContentView: View {
                     manualPairingCode = ""
                 }
             } message: {
-                Text("Paste the pairing code shown in the terminal on your computer or in your phone shell.")
+                Text("Paste the pairing code shown in the terminal on your computer or in your iPad shell.")
             }
     }
 
@@ -319,6 +321,7 @@ struct ContentView: View {
     private var qrScannerBody: some View {
         QRScannerView(
             onBack: scannerBackAction,
+            onPairWithCode: presentManualPairingEntryAfterStoppingReconnect,
             onScan: { pairingPayload in
                 Task {
                     isShowingManualScanner = false
@@ -354,7 +357,7 @@ struct ContentView: View {
 
     // Uses the PR #24 iPad proportions while keeping the current sidebar/detail behavior.
     private var splitMainAppBody: some View {
-        NavigationSplitView {
+        NavigationSplitView(preferredCompactColumn: $preferredSplitCompactColumn) {
             SidebarView(
                 selectedThread: $selectedThread,
                 showSettings: $showSettings,
@@ -441,7 +444,7 @@ struct ContentView: View {
     // MARK: - Layers
 
     private var usesSplitNavigationShell: Bool {
-        horizontalSizeClass == .regular
+        PadPresentationStyle.usesPadPresentation(horizontalSizeClass: horizontalSizeClass)
     }
 
     private var detailNavigationLayer: some View {
@@ -818,6 +821,7 @@ struct ContentView: View {
         }
 
         selectedThread = thread
+        preferredSplitCompactColumn = .detail
         codex.activeThreadId = thread.id
         codex.markThreadAsViewed(thread.id)
         Task { @MainActor in
@@ -853,6 +857,7 @@ struct ContentView: View {
         isOpeningNewChatFromSidebar = isOpening
         if isOpening {
             selectedThread = nil
+            preferredSplitCompactColumn = .detail
             codex.activeThreadId = nil
         }
     }
@@ -1426,6 +1431,7 @@ struct ContentView: View {
         do {
             let thread = try await codex.startThread()
             selectedThread = thread
+            preferredSplitCompactColumn = .detail
         } catch {
             codex.lastErrorMessage = codex.userFacingTurnErrorMessage(from: error)
         }

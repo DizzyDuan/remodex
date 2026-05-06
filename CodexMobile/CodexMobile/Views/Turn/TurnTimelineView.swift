@@ -364,6 +364,8 @@ private struct TurnTimelineRowsSection: View {
 }
 
 private struct TurnTimelineFooterContainer<Composer: View>: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     let hidesErrorMessage: Bool
     let errorMessage: String?
     let onReportError: (String) -> Void
@@ -389,6 +391,8 @@ private struct TurnTimelineFooterContainer<Composer: View>: View {
         }
 
         footerContent
+            .frame(maxWidth: footerMaxWidth)
+            .frame(maxWidth: .infinity)
             .overlay(alignment: .top) {
                 if shouldShowScrollToLatestButton, let onScrollToLatest {
                     scrollToLatestButton(action: onScrollToLatest)
@@ -396,6 +400,10 @@ private struct TurnTimelineFooterContainer<Composer: View>: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: shouldShowScrollToLatestButton)
+    }
+
+    private var footerMaxWidth: CGFloat {
+        PadPresentationStyle.usesPadPresentation(horizontalSizeClass: horizontalSizeClass) ? 860 : .infinity
     }
 
     private func scrollToLatestButton(action: @escaping () -> Void) -> some View {
@@ -416,6 +424,7 @@ private struct TurnTimelineFooterContainer<Composer: View>: View {
 
 struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     let threadID: String
     let messages: [CodexMessage]
@@ -568,6 +577,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         dynamicTypeSize.isAccessibilitySize ? 20 : 16
     }
 
+    private var readableTimelineMaxWidth: CGFloat {
+        PadPresentationStyle.usesPadPresentation(horizontalSizeClass: horizontalSizeClass) ? 860 : .infinity
+    }
+
     private var shouldStageHeavyThreadOpen: Bool {
         false
     }
@@ -652,7 +665,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                         // over-wide ideal size, which makes the vertical timeline pan sideways.
                         .frame(width: contentWidth, alignment: .leading)
                         .padding(.horizontal, timelineHorizontalPadding)
-                        .frame(width: viewport.size.width, alignment: .leading)
+                        .frame(width: viewport.size.width, alignment: .center)
                         .clipped()
                         .background(VerticalScrollAxisGuard())
                         .padding(.top, 12)
@@ -663,7 +676,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                         Color.clear
                             .frame(width: contentWidth, height: 1)
                             .padding(.horizontal, timelineHorizontalPadding)
-                            .frame(width: viewport.size.width, alignment: .leading)
+                            .frame(width: viewport.size.width, alignment: .center)
                             .clipped()
                             .id(scrollBottomAnchorID)
                             .allowsHitTesting(false)
@@ -822,7 +835,10 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     // Keeps the padded timeline exactly viewport-wide so streaming rows cannot
     // expand the vertical ScrollView into a horizontally draggable surface.
     private func timelineContentWidth(for viewportWidth: CGFloat) -> CGFloat {
-        max(0, viewportWidth - (timelineHorizontalPadding * 2))
+        min(
+            max(0, viewportWidth - (timelineHorizontalPadding * 2)),
+            readableTimelineMaxWidth
+        )
     }
 
     private func recomputeRenderItemsIfNeeded() {

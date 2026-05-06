@@ -13,6 +13,7 @@ struct QRScannerView: View {
     @Environment(\.openURL) private var openURL
 
     let onBack: (() -> Void)?
+    let onPairWithCode: (() -> Void)?
     let onScan: (CodexPairingQRPayload) -> Void
 
     @State private var scannerError: String?
@@ -26,9 +27,11 @@ struct QRScannerView: View {
         initialHasCameraPermission: Bool = false,
         initialIsCheckingPermission: Bool = true,
         onBack: (() -> Void)? = nil,
+        onPairWithCode: (() -> Void)? = nil,
         onScan: @escaping (CodexPairingQRPayload) -> Void
     ) {
         self.onBack = onBack
+        self.onPairWithCode = onPairWithCode
         self.onScan = onScan
         _bridgeUpdatePrompt = State(initialValue: initialBridgeUpdatePrompt)
         _hasCameraPermission = State(initialValue: initialHasCameraPermission)
@@ -219,7 +222,7 @@ struct QRScannerView: View {
     private func scannerOverlay(for availableWidth: CGFloat) -> some View {
         let frameSize = scannerFrameSize(for: availableWidth)
 
-        VStack(spacing: 24) {
+        return VStack(spacing: 24) {
             Spacer()
 
             RoundedRectangle(cornerRadius: 20)
@@ -229,6 +232,8 @@ struct QRScannerView: View {
             Text("Scan the Remodex QR code")
                 .font(AppFont.subheadline(weight: .medium))
                 .foregroundStyle(.white)
+
+            pairWithCodeButton
 
             Spacer()
         }
@@ -256,9 +261,34 @@ struct QRScannerView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+
+            pairWithCodeButton
         }
         .frame(maxWidth: permissionContentWidth(for: availableWidth))
         .padding(.horizontal, 24)
+    }
+
+    @ViewBuilder
+    private var pairWithCodeButton: some View {
+        if let onPairWithCode {
+            Button(action: onPairWithCode) {
+                HStack(spacing: 8) {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Pair with Code")
+                        .font(AppFont.subheadline(weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.12), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // Keeps permission-prompt teardown on the main actor so backing out mid-prompt
@@ -422,19 +452,19 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     private let captureSession = AVCaptureSession()
     private let metadataOutput = AVCaptureMetadataOutput()
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+    private var previewRotationObservation: NSKeyValueObservation?
+    private var captureRotationObservation: NSKeyValueObservation?
     private var hasScanned = false
     private var isStoppingCamera = false
-    private var currentVideoOrientation: AVCaptureVideoOrientation = .portrait
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        startObservingDeviceOrientation()
         setupCamera()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        startObservingDeviceOrientation()
         setupCamera()
     }
 
@@ -447,22 +477,6 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         updateCaptureOrientation()
-    }
-
-    @objc
-    private func handleDeviceOrientationDidChange() {
-        updateCaptureOrientation()
-    }
-
-    // Keeps the preview and metadata output aligned when iPad rotates between scan attempts.
-    private func startObservingDeviceOrientation() {
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleDeviceOrientationDidChange),
-            name: UIDevice.orientationDidChangeNotification,
-            object: nil
-        )
     }
 
     // Configures the metadata session once and starts it off the main thread.
@@ -486,6 +500,10 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
         layer.videoGravity = .resizeAspectFill
         self.layer.addSublayer(layer)
         previewLayer = layer
+
+        let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
+        rotationCoordinator = coordinator
+        observeRotationCoordinator(coordinator)
         updateCaptureOrientation()
 
         QRCameraLifecycleCoordinator.shared.start(session: captureSession) { [weak self] in
@@ -497,33 +515,38 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     }
 
     private func updateCaptureOrientation() {
-        let orientation = captureVideoOrientation(for: UIDevice.current.orientation) ?? currentVideoOrientation
+        guard let rotationCoordinator else {
+            return
+        }
 
         if let connection = previewLayer?.connection,
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = orientation
+           connection.isVideoRotationAngleSupported(rotationCoordinator.videoRotationAngleForHorizonLevelPreview) {
+            connection.videoRotationAngle = rotationCoordinator.videoRotationAngleForHorizonLevelPreview
         }
 
         if let connection = metadataOutput.connection(with: .video),
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = orientation
+           connection.isVideoRotationAngleSupported(rotationCoordinator.videoRotationAngleForHorizonLevelCapture) {
+            connection.videoRotationAngle = rotationCoordinator.videoRotationAngleForHorizonLevelCapture
         }
-
-        currentVideoOrientation = orientation
     }
 
-    private func captureVideoOrientation(for deviceOrientation: UIDeviceOrientation) -> AVCaptureVideoOrientation? {
-        switch deviceOrientation {
-        case .portrait:
-            return .portrait
-        case .portraitUpsideDown:
-            return .portraitUpsideDown
-        case .landscapeLeft:
-            return .landscapeRight
-        case .landscapeRight:
-            return .landscapeLeft
-        default:
-            return nil
+    private func observeRotationCoordinator(_ coordinator: AVCaptureDevice.RotationCoordinator) {
+        previewRotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelPreview,
+            options: [.new]
+        ) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.updateCaptureOrientation()
+            }
+        }
+
+        captureRotationObservation = coordinator.observe(
+            \.videoRotationAngleForHorizonLevelCapture,
+            options: [.new]
+        ) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.updateCaptureOrientation()
+            }
         }
     }
 
@@ -566,8 +589,6 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
-        UIDevice.current.endGeneratingDeviceOrientationNotifications()
         stopCamera()
     }
 }

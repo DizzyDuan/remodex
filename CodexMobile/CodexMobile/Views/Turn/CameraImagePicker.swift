@@ -82,7 +82,6 @@ private final class AdaptiveCameraPickerController: UIImagePickerController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         setNeedsUpdateOfSupportedInterfaceOrientations()
-        UIViewController.attemptRotationToDeviceOrientation()
     }
 
     // Matches the picker orientation to the active iPad scene instead of assuming portrait.
