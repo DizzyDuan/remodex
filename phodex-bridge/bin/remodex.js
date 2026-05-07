@@ -49,7 +49,12 @@ async function main({
   exitImpl = process.exit,
   deps = defaultDeps,
 } = {}) {
-  const { command, jsonOutput, watchThreadId } = parseCliArgs(argv.slice(2));
+  const {
+    command,
+    extraRelaySessions,
+    jsonOutput,
+    watchThreadId,
+  } = parseCliArgs(argv.slice(2));
 
   if (isVersionCommand(command)) {
     emitVersion({ jsonOutput, consoleImpl });
@@ -73,6 +78,7 @@ async function main({
   }
 
   if (command === "run") {
+    applyExtraRelaySessions(extraRelaySessions);
     deps.startBridge();
     return;
   }
@@ -233,7 +239,7 @@ async function main({
 
   consoleImpl.error(`Unknown command: ${command}`);
   consoleImpl.error(
-    "Usage: remodex up | remodex run | remodex start | remodex restart | remodex stop | remodex status | "
+    "Usage: remodex up | remodex run [--extra-device] | remodex start | remodex restart | remodex stop | remodex status | "
     + "remodex reset-pairing | remodex resume | remodex watch [threadId] | remodex --version | "
     + "append --json to start/restart/stop/status/reset-pairing/resume for machine-readable output"
   );
@@ -242,6 +248,7 @@ async function main({
 
 function parseCliArgs(rawArgs) {
   const positionals = [];
+  let extraRelaySessions = 0;
   let jsonOutput = false;
 
   for (const arg of rawArgs) {
@@ -250,14 +257,45 @@ function parseCliArgs(rawArgs) {
       continue;
     }
 
+    if (arg === "--extra-device" || arg === "--second-device" || arg === "--multi-device") {
+      extraRelaySessions = Math.max(extraRelaySessions, 1);
+      continue;
+    }
+
+    if (arg.startsWith("--extra-devices=")) {
+      extraRelaySessions = Math.max(
+        extraRelaySessions,
+        parsePositiveInteger(arg.slice("--extra-devices=".length))
+      );
+      continue;
+    }
+
     positionals.push(arg);
   }
 
   return {
     command: positionals[0] || "up",
+    extraRelaySessions,
     jsonOutput,
     watchThreadId: positionals[1] || "",
   };
+}
+
+function applyExtraRelaySessions(extraRelaySessions) {
+  if (!extraRelaySessions || process.env.REMODEX_EXTRA_RELAY_SESSIONS) {
+    return;
+  }
+
+  process.env.REMODEX_EXTRA_RELAY_SESSIONS = String(Math.min(extraRelaySessions, 3));
+}
+
+function parsePositiveInteger(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+
+  return parsed;
 }
 
 function emitVersion({
@@ -312,4 +350,5 @@ function isVersionCommand(value) {
 module.exports = {
   isVersionCommand,
   main,
+  parseCliArgs,
 };
