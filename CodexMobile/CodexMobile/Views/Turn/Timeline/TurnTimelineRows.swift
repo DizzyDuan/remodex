@@ -294,6 +294,7 @@ struct TurnTimelineRowsSection: View {
     let isLoadingEarlierMessages: Bool
     let earlierMessagesErrorMessage: String?
     let renderItems: [TurnTimelineRenderItem]
+    let isThreadRunning: Bool
     let isRetryAvailable: Bool
     let cachedBlockInfoByMessageID: [String: AssistantBlockAccessoryState]
     let planSessionSource: CodexPlanSessionSource?
@@ -395,8 +396,27 @@ struct TurnTimelineRowsSection: View {
                     )
                 }
             }
+
+            if shouldShowPendingAssistantIndicator {
+                PendingAssistantIndicatorRow()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // Bridges the gap between the optimistic user bubble and the first rendered
+    // assistant/system row, whose placeholder text may be intentionally hidden.
+    private var shouldShowPendingAssistantIndicator: Bool {
+        guard isThreadRunning else { return false }
+
+        switch renderItems.last {
+        case .message(let message):
+            return message.role == .user
+        case .toolBurst, .previousMessages:
+            return false
+        case nil:
+            return false
+        }
     }
 
     private var earlierMessagesButtonTitle: String {
@@ -404,5 +424,17 @@ struct TurnTimelineRowsSection: View {
             return "Loading earlier messages..."
         }
         return earlierMessagesErrorMessage ?? "Load earlier messages"
+    }
+}
+
+private struct PendingAssistantIndicatorRow: View {
+    var body: some View {
+        HStack {
+            TerminalRunningIndicator()
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
     }
 }

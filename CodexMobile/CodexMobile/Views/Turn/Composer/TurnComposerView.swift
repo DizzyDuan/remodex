@@ -173,7 +173,11 @@ struct TurnComposerView: View {
                         isInputFocused.wrappedValue = true
                     }
                     .onChange(of: input) { _, newValue in
-                        onInputChanged(newValue)
+                        // Defer the observable-model mutation out of the .onChange action
+                        // to avoid AttributeGraph cycles when the parent re-renders.
+                        DispatchQueue.main.async {
+                            onInputChanged(newValue)
+                        }
                     }
 
                     ComposerBottomBar(
@@ -279,7 +283,6 @@ struct TurnComposerView: View {
         .padding(.top, 4)
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(.easeInOut(duration: 0.18), value: isInputFocused.wrappedValue)
     }
 
     private var placeholderText: String {

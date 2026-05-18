@@ -4210,9 +4210,7 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         XCTAssertTrue(
             TurnScrollStateTracker.shouldPinDuringGeometryChange(
                 currentMode: .followBottom,
-                isScrolledToBottom: false,
-                isAutomaticScrollingPaused: false,
-                assistantAnchorTargetExists: true
+                isAutomaticScrollingPaused: false
             )
         )
     }
@@ -4264,38 +4262,30 @@ final class TurnScrollStateTrackerTests: XCTestCase {
         XCTAssertFalse(
             TurnScrollStateTracker.shouldPinDuringGeometryChange(
                 currentMode: .manual,
-                isScrolledToBottom: true,
-                isAutomaticScrollingPaused: false,
-                assistantAnchorTargetExists: false
+                isAutomaticScrollingPaused: false
             )
         )
 
         XCTAssertFalse(
             TurnScrollStateTracker.shouldPinDuringGeometryChange(
                 currentMode: .followBottom,
-                isScrolledToBottom: true,
-                isAutomaticScrollingPaused: true,
-                assistantAnchorTargetExists: false
+                isAutomaticScrollingPaused: true
             )
         )
     }
 
-    func testAssistantAnchorPinsOnlyWhileWaitingForAssistantTarget() {
-        XCTAssertTrue(
+    func testAssistantAnchorDoesNotBottomPinWhileWaitingForAssistantTarget() {
+        XCTAssertFalse(
             TurnScrollStateTracker.shouldPinDuringGeometryChange(
                 currentMode: .anchorAssistantResponse,
-                isScrolledToBottom: true,
-                isAutomaticScrollingPaused: false,
-                assistantAnchorTargetExists: false
+                isAutomaticScrollingPaused: false
             )
         )
 
         XCTAssertFalse(
             TurnScrollStateTracker.shouldPinDuringGeometryChange(
                 currentMode: .anchorAssistantResponse,
-                isScrolledToBottom: true,
-                isAutomaticScrollingPaused: false,
-                assistantAnchorTargetExists: true
+                isAutomaticScrollingPaused: true
             )
         )
     }
