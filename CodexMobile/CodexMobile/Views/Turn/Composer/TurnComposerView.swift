@@ -129,6 +129,40 @@ struct TurnComposerView: View {
                     onRemoveQueuedDraft: onRemoveQueuedDraft
                 )
 
+                if showsSecondaryBar {
+                    TurnComposerSecondaryBar(
+                        isInputFocused: isInputFocused.wrappedValue,
+                        isEmptyThread: isEmptyThread,
+                        hasWorkingDirectory: hasWorkingDirectory,
+                        isWorktreeProject: isWorktreeProject,
+                        selectedAccessMode: selectedAccessMode,
+                        contextWindowUsage: contextWindowUsage,
+                        rateLimitBuckets: rateLimitBuckets,
+                        isLoadingRateLimits: isLoadingRateLimits,
+                        rateLimitsErrorMessage: rateLimitsErrorMessage,
+                        shouldAutoRefreshUsageStatus: shouldAutoRefreshUsageStatus,
+                        showsGitBranchSelector: showsGitBranchSelector,
+                        isGitBranchSelectorEnabled: isGitBranchSelectorEnabled,
+                        availableGitBranchTargets: availableGitBranchTargets,
+                        gitBranchesCheckedOutElsewhere: gitBranchesCheckedOutElsewhere,
+                        gitWorktreePathsByBranch: gitWorktreePathsByBranch,
+                        selectedGitBaseBranch: selectedGitBaseBranch,
+                        currentGitBranch: currentGitBranch,
+                        gitDefaultBranch: gitDefaultBranch,
+                        isLoadingGitBranchTargets: isLoadingGitBranchTargets,
+                        isSwitchingGitBranch: isSwitchingGitBranch,
+                        isCreatingGitWorktree: isCreatingGitWorktree,
+                        onSelectGitBranch: onSelectGitBranch,
+                        onCreateGitBranch: onCreateGitBranch,
+                        onSelectGitBaseBranch: onSelectGitBaseBranch,
+                        onRefreshGitBranches: onRefreshGitBranches,
+                        onRefreshUsageStatus: onRefreshUsageStatus,
+                        onSelectAccessMode: onSelectAccessMode,
+                        canHandOffToWorktree: canHandOffToWorktree,
+                        onTapCreateWorktree: onTapCreateWorktree
+                    )
+                }
+
                 VStack(spacing: 0) {
                     TurnComposerAccessorySection(
                         state: accessoryState,
@@ -241,41 +275,6 @@ struct TurnComposerView: View {
                         .offset(y: -8)
                 }
                 .zIndex(2)
-
-                // Kept as a separate component so the lower meta bar can evolve without reopening this file.
-                if showsSecondaryBar {
-                    TurnComposerSecondaryBar(
-                        isInputFocused: isInputFocused.wrappedValue,
-                        isEmptyThread: isEmptyThread,
-                        hasWorkingDirectory: hasWorkingDirectory,
-                        isWorktreeProject: isWorktreeProject,
-                        selectedAccessMode: selectedAccessMode,
-                        contextWindowUsage: contextWindowUsage,
-                        rateLimitBuckets: rateLimitBuckets,
-                        isLoadingRateLimits: isLoadingRateLimits,
-                        rateLimitsErrorMessage: rateLimitsErrorMessage,
-                        shouldAutoRefreshUsageStatus: shouldAutoRefreshUsageStatus,
-                        showsGitBranchSelector: showsGitBranchSelector,
-                        isGitBranchSelectorEnabled: isGitBranchSelectorEnabled,
-                        availableGitBranchTargets: availableGitBranchTargets,
-                        gitBranchesCheckedOutElsewhere: gitBranchesCheckedOutElsewhere,
-                        gitWorktreePathsByBranch: gitWorktreePathsByBranch,
-                        selectedGitBaseBranch: selectedGitBaseBranch,
-                        currentGitBranch: currentGitBranch,
-                        gitDefaultBranch: gitDefaultBranch,
-                        isLoadingGitBranchTargets: isLoadingGitBranchTargets,
-                        isSwitchingGitBranch: isSwitchingGitBranch,
-                        isCreatingGitWorktree: isCreatingGitWorktree,
-                        onSelectGitBranch: onSelectGitBranch,
-                        onCreateGitBranch: onCreateGitBranch,
-                        onSelectGitBaseBranch: onSelectGitBaseBranch,
-                        onRefreshGitBranches: onRefreshGitBranches,
-                        onRefreshUsageStatus: onRefreshUsageStatus,
-                        onSelectAccessMode: onSelectAccessMode,
-                        canHandOffToWorktree: canHandOffToWorktree,
-                        onTapCreateWorktree: onTapCreateWorktree
-                    )
-                }
             }
         }
         .padding(.horizontal, 12)

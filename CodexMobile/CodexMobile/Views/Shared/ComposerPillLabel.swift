@@ -24,10 +24,10 @@ struct ComposerPillLabel: View {
         title: String,
         iconSystemName: String,
         foregroundColor: Color = Color(.secondaryLabel),
-        titleFont: Font = AppFont.subheadline(),
+        titleFont: Font = AppFont.footnote(),
         titleWeight: Font.Weight = .regular,
-        iconSize: CGFloat = 16,
-        chevronSize: CGFloat = 9,
+        iconSize: CGFloat = 12,
+        chevronSize: CGFloat = 7,
         showsTrailingChevron: Bool = true
     ) {
         self.title = title
@@ -54,7 +54,7 @@ struct ComposerPillLabel: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.vertical, 5)
         .adaptiveGlass(.regular, isInteractive: true, in: Capsule())
         .foregroundStyle(foregroundColor)
         .contentShape(Capsule())
@@ -71,7 +71,6 @@ struct ComposerPillLabel: View {
         ComposerPillLabel(
             title: "main",
             iconSystemName: "remodex.git-branch",
-            titleFont: AppFont.subheadline(),
             showsTrailingChevron: false
         )
     }

@@ -151,7 +151,6 @@ struct TurnGitBranchSelector: View, Equatable {
                 title: visibleBranchLabel,
                 iconSystemName: "remodex.git-branch",
                 foregroundColor: branchLabelColor,
-                titleFont: AppFont.subheadline(),
                 showsTrailingChevron: false
             )
         }

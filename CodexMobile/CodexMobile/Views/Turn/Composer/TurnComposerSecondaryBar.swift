@@ -1,5 +1,5 @@
 // FILE: TurnComposerSecondaryBar.swift
-// Purpose: Owns the secondary composer controls shown below the main input card.
+// Purpose: Owns the secondary composer controls shown above the main input card.
 // Layer: View Component
 // Exports: TurnComposerSecondaryBar
 // Depends on: SwiftUI, UIKit, TurnGitBranchSelector, ContextWindowProgressRing,
@@ -43,13 +43,13 @@ struct TurnComposerSecondaryBar: View {
     let onTapCreateWorktree: () -> Void
 
     private let branchLabelColor = Color(.secondaryLabel)
-    private let accessControlSize: CGFloat = 36
+    private let accessControlSize: CGFloat = 32
     // Icona dentro il cerchio access-mode: dimensionata per matchare il rapporto
-    // icon/container dei ComposerPillLabel (~0.55) invece di scalare col font ambient,
+    // icon/container dei ComposerPillLabel (~0.5) invece di scalare col font ambient,
     // altrimenti l'asset central-shield-* (viewBox 24 con padding interno) risulta
     // visibilmente più piccolo delle icone "Local"/"main".
-    private let accessControlIconSize: CGFloat = 20
-    private var branchTextFont: Font { AppFont.subheadline() }
+    private let accessControlIconSize: CGFloat = 16
+    private var branchTextFont: Font { AppFont.footnote() }
     private var runtimeLabelTitle: String {
         if !hasWorkingDirectory {
             return "Quick Chat"
