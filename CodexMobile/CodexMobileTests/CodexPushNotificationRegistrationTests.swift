@@ -359,10 +359,7 @@ final class CodexPushNotificationRegistrationTests: XCTestCase {
             }
         }
 
-        service.reconcileLocalThreadsWithServer(
-            [CodexThread(id: "thread-retry", title: "Retry thread")],
-            serverArchivedThreads: []
-        )
+        service.reconcileLocalThreadsWithServer([CodexThread(id: "thread-retry", title: "Retry thread")])
         try? await Task.sleep(nanoseconds: 80_000_000)
 
         XCTAssertEqual(service.activeThreadId, "thread-retry")
@@ -406,6 +403,7 @@ private func makeThreadJSON(id: String, title: String) -> JSONValue {
 private final class MockRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
     private(set) var registerCallCount = 0
 
+    @MainActor
     func registerForRemoteNotifications() {
         registerCallCount += 1
     }

@@ -1,7 +1,7 @@
 // FILE: SidebarFloatingSettingsButton.swift
 // Purpose: Floating shortcuts used to open top-level sidebar destinations.
 // Layer: View Component
-// Exports: SidebarFloatingSettingsButton, SidebarFloatingMacsButton, SidebarComputerConnectionStatusView
+// Exports: SidebarFloatingSettingsButton, SidebarFloatingMacsButton, SidebarFloatingTerminalButton, SidebarComputerConnectionStatusView
 
 import SwiftUI
 
@@ -12,12 +12,8 @@ private struct SidebarFloatingCircleButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: {
-            HapticFeedback.shared.triggerImpactFeedback()
-            action()
-        }) {
-            Image(systemName: systemImage)
-                .font(AppFont.system(size: 17, weight: .semibold))
+        HapticButton(hapticStyle: .medium, action: action) {
+            RemodexIcon.image(systemName: systemImage, size: 17, weight: .semibold)
                 .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
                 .frame(width: 44, height: 44)
                 .adaptiveGlass(.regular, in: Circle())
@@ -53,6 +49,23 @@ struct SidebarFloatingMacsButton: View {
             accessibilityLabel: "My Macs",
             action: action
         )
+    }
+}
+
+struct SidebarFloatingTerminalButton: View {
+    let colorScheme: ColorScheme
+    let action: () -> Void
+
+    var body: some View {
+        HapticButton(hapticStyle: .medium, action: action) {
+            RemodexIcon.image(systemName: "terminal.fill", size: 17, weight: .semibold)
+                .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+                .frame(width: 44, height: 44)
+                .adaptiveGlass(.regular, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityLabel("Terminal")
     }
 }
 

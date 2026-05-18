@@ -114,6 +114,7 @@ extension CodexService {
             selectedModelId = RuntimeSelectionDefaults.modelId
             selectedReasoningEffort = RuntimeSelectionDefaults.reasoningEffort
         }
+        hasPersistedSelectedModelId = true
         normalizeRuntimeSelectionsAfterModelsUpdate()
     }
 
@@ -207,6 +208,31 @@ extension CodexService {
 
     func selectedModelOption() -> CodexModelOption? {
         selectedModelOption(from: availableModels)
+    }
+
+    // Composer chrome should not present the canonical fallback as a loaded user choice.
+    func visibleSelectedModelIDForComposer() -> String? {
+        if let selectedModel = selectedModelOption() {
+            return selectedModel.id
+        }
+
+        guard hasPersistedSelectedModelId else {
+            return nil
+        }
+
+        if shouldHidePersistedDefaultWhileRuntimeLoads {
+            return nil
+        }
+
+        return selectedModelId
+    }
+
+    // Keeps the model pill honest while bridge runtime metadata is still in flight.
+    func isRuntimeSelectionLoadingForComposer() -> Bool {
+        guard visibleSelectedModelIDForComposer() == nil else {
+            return false
+        }
+        return isBootstrappingConnectionSync || isLoadingThreads || isLoadingModels
     }
 
     func selectedGitWriterModelOption() -> CodexModelOption? {
@@ -391,7 +417,7 @@ extension CodexService {
             }
         }
 
-        var finalAttemptParams = baseParams
+        let finalAttemptParams = baseParams
         debugRuntimeLog("\(method) fallback using minimal payload")
         return try await sendRequestWithApprovalPolicyFallback(
             method: method,
@@ -452,6 +478,20 @@ extension CodexService {
 }
 
 private extension CodexService {
+    var shouldHidePersistedDefaultWhileRuntimeLoads: Bool {
+        guard availableModels.isEmpty else {
+            return false
+        }
+
+        guard let selectedModelId else {
+            return false
+        }
+
+        let normalizedSelection = selectedModelId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedSelection == RuntimeSelectionDefaults.modelId
+            && (isBootstrappingConnectionSync || isLoadingModels)
+    }
+
     // Centralizes thread-override mutation so empty records never linger in storage.
     func mutateThreadRuntimeOverride(
         for threadId: String,
@@ -473,52 +513,6 @@ private extension CodexService {
         }
 
         persistThreadRuntimeOverrides()
-    }
-
-    func normalizeRuntimeSelectionsAfterModelsUpdate() {
-        guard !availableModels.isEmpty else {
-            selectedModelId = selectedModelId ?? RuntimeSelectionDefaults.modelId
-            selectedReasoningEffort = selectedReasoningEffort ?? RuntimeSelectionDefaults.reasoningEffort
-            persistRuntimeSelections()
-            return
-        }
-
-        let resolvedModel = selectedModelOption(from: availableModels) ?? fallbackModel(from: availableModels)
-        selectedModelId = resolvedModel?.id
-
-        if let resolvedModel {
-            let supported = Set(resolvedModel.supportedReasoningEfforts.map { $0.reasoningEffort })
-            if supported.isEmpty {
-                selectedReasoningEffort = nil
-            } else if let selectedReasoningEffort,
-                      supported.contains(selectedReasoningEffort) {
-                // Keep current reasoning.
-            } else if let modelDefault = resolvedModel.defaultReasoningEffort,
-                      supported.contains(modelDefault) {
-                selectedReasoningEffort = modelDefault
-            } else if supported.contains("medium") {
-                selectedReasoningEffort = "medium"
-            } else {
-                selectedReasoningEffort = resolvedModel.supportedReasoningEfforts.first?.reasoningEffort
-            }
-
-            if let selectedServiceTier,
-               !resolvedModel.supportsServiceTier(selectedServiceTier) {
-                self.selectedServiceTier = nil
-            }
-        } else {
-            selectedReasoningEffort = nil
-            selectedServiceTier = nil
-        }
-
-        if let selectedGitWriterModelId,
-           !availableModels.contains(where: {
-               $0.id == selectedGitWriterModelId || $0.model == selectedGitWriterModelId
-           }) {
-            self.selectedGitWriterModelId = nil
-        }
-
-        persistRuntimeSelections()
     }
 
     func selectedModelOption(from models: [CodexModelOption]) -> CodexModelOption? {
@@ -574,7 +568,7 @@ private extension CodexService {
     }
 
     func persistRuntimeSelections() {
-        if let selectedModelId, !selectedModelId.isEmpty {
+        if let selectedModelId, !selectedModelId.isEmpty, hasPersistedSelectedModelId {
             defaults.set(selectedModelId, forKey: Self.selectedModelIdDefaultsKey)
         } else {
             defaults.removeObject(forKey: Self.selectedModelIdDefaultsKey)
@@ -610,5 +604,58 @@ private extension CodexService {
         }
 
         defaults.set(encodedOverrides, forKey: macScopedDefaultsKey(Self.threadRuntimeOverridesDefaultsKey))
+    }
+}
+
+extension CodexService {
+    func normalizeRuntimeSelectionsAfterModelsUpdate() {
+        guard !availableModels.isEmpty else {
+            if selectedModelId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                selectedModelId = nil
+            }
+            if selectedReasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                selectedReasoningEffort = nil
+            }
+            persistRuntimeSelections()
+            return
+        }
+
+        let resolvedModel = selectedModelOption(from: availableModels) ?? fallbackModel(from: availableModels)
+        selectedModelId = resolvedModel?.id
+        hasPersistedSelectedModelId = resolvedModel != nil
+
+        if let resolvedModel {
+            let supported = Set(resolvedModel.supportedReasoningEfforts.map { $0.reasoningEffort })
+            if supported.isEmpty {
+                selectedReasoningEffort = nil
+            } else if let selectedReasoningEffort,
+                      supported.contains(selectedReasoningEffort) {
+                // Keep current reasoning.
+            } else if let modelDefault = resolvedModel.defaultReasoningEffort,
+                      supported.contains(modelDefault) {
+                selectedReasoningEffort = modelDefault
+            } else if supported.contains("medium") {
+                selectedReasoningEffort = "medium"
+            } else {
+                selectedReasoningEffort = resolvedModel.supportedReasoningEfforts.first?.reasoningEffort
+            }
+
+            if let selectedServiceTier,
+               !resolvedModel.supportsServiceTier(selectedServiceTier) {
+                self.selectedServiceTier = nil
+            }
+        } else {
+            selectedReasoningEffort = nil
+            selectedServiceTier = nil
+        }
+
+        if let selectedGitWriterModelId,
+           !availableModels.contains(where: {
+               $0.id == selectedGitWriterModelId || $0.model == selectedGitWriterModelId
+           }) {
+            self.selectedGitWriterModelId = nil
+        }
+
+        persistRuntimeSelections()
     }
 }

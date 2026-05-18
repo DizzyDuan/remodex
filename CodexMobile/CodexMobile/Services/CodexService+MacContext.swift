@@ -36,10 +36,11 @@ extension CodexService {
     func saveLocalState(for macDeviceId: String?) {
         let normalizedMacDeviceId = normalizedMacScopedDeviceId(macDeviceId)
         messagePersistence.save(messagesByThread, macDeviceId: normalizedMacDeviceId)
+        composerDraftPersistence.save(composerDraftsByThreadID, macDeviceId: normalizedMacDeviceId)
         aiChangeSetPersistence.save(Array(aiChangeSetsByID.values), macDeviceId: normalizedMacDeviceId)
     }
 
-    // Loads messages and assistant change-set metadata for the provided Mac namespace.
+    // Loads messages, drafts, and assistant change-set metadata for the provided Mac namespace.
     func loadLocalState(for macDeviceId: String?) {
         let normalizedMacDeviceId = normalizedMacScopedDeviceId(macDeviceId)
         let includeLegacyFallback = shouldLoadLegacyLocalStateFallback(for: normalizedMacDeviceId)
@@ -57,6 +58,10 @@ extension CodexService {
 
             CodexMessageOrderCounter.seed(from: loadedMessages)
             messagesByThread = loadedMessages
+            composerDraftsByThreadID = composerDraftPersistence.load(
+                macDeviceId: normalizedMacDeviceId,
+                includeLegacyFallback: includeLegacyFallback
+            )
             messageRevisionByThread = Dictionary(uniqueKeysWithValues: loadedMessages.keys.map { ($0, 0) })
             messageIndexCacheByThread.removeAll()
             latestAssistantOutputByThread.removeAll()
@@ -238,6 +243,7 @@ extension CodexService {
             activeTurnId = nil
             activeTurnIdByThread.removeAll()
             messagesByThread.removeAll()
+            composerDraftsByThreadID.removeAll()
             messageRevisionByThread.removeAll()
             threadIdByTurnID.removeAll()
             queuedTurnDraftsByThread.removeAll()

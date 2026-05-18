@@ -120,20 +120,53 @@ enum CodexBridgeHostPlatform: String, Codable, Sendable {
 }
 
 struct CodexBridgeHostCapabilities: Codable, Equatable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case desktopHandoff
+        case displayWake
+        case keepAwake
+        case hostBrowserLogin
+        case terminal
+    }
+
     var desktopHandoff: Bool = false
     var displayWake: Bool = false
     var keepAwake: Bool = false
     var hostBrowserLogin: Bool = false
+    var terminal: Bool = false
+
+    init(
+        desktopHandoff: Bool = false,
+        displayWake: Bool = false,
+        keepAwake: Bool = false,
+        hostBrowserLogin: Bool = false,
+        terminal: Bool = false
+    ) {
+        self.desktopHandoff = desktopHandoff
+        self.displayWake = displayWake
+        self.keepAwake = keepAwake
+        self.hostBrowserLogin = hostBrowserLogin
+        self.terminal = terminal
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        desktopHandoff = try container.decodeIfPresent(Bool.self, forKey: .desktopHandoff) ?? false
+        displayWake = try container.decodeIfPresent(Bool.self, forKey: .displayWake) ?? false
+        keepAwake = try container.decodeIfPresent(Bool.self, forKey: .keepAwake) ?? false
+        hostBrowserLogin = try container.decodeIfPresent(Bool.self, forKey: .hostBrowserLogin) ?? false
+        terminal = try container.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
+    }
 
     static let legacyMacOS = CodexBridgeHostCapabilities(
         desktopHandoff: true,
         displayWake: true,
         keepAwake: true,
-        hostBrowserLogin: true
+        hostBrowserLogin: true,
+        terminal: false
     )
 }
 
-func codexGPTAccountInitialSnapshot() -> CodexGPTAccountSnapshot {
+nonisolated func codexGPTAccountInitialSnapshot() -> CodexGPTAccountSnapshot {
     CodexGPTAccountSnapshot(
         status: .unknown,
         authMethod: nil,
@@ -322,7 +355,10 @@ extension CodexService {
         clearGPTLoginState()
         clearGPTLoginCallbackState()
         stopGPTLoginSync()
-        applyGPTAccountSnapshot(loggedOutGPTAccountSnapshot(status: .notLoggedIn))
+        applyGPTAccountSnapshot(loggedOutGPTAccountSnapshot(
+            status: .notLoggedIn,
+            retaining: codexGPTAccountInitialSnapshot()
+        ))
         gptAccountErrorMessage = nil
     }
 
@@ -1053,7 +1089,7 @@ extension CodexService {
     func loggedOutGPTAccountSnapshot(
         status: CodexGPTAccountStatus,
         needsReauth: Bool = false,
-        retaining snapshot: CodexGPTAccountSnapshot = codexGPTAccountInitialSnapshot()
+        retaining snapshot: CodexGPTAccountSnapshot
     ) -> CodexGPTAccountSnapshot {
         CodexGPTAccountSnapshot(
             status: status,
@@ -1182,7 +1218,8 @@ extension CodexService {
             desktopHandoff: firstBoolValue(in: capabilitiesObject, keys: ["desktopHandoff", "desktop_handoff"]) ?? false,
             displayWake: firstBoolValue(in: capabilitiesObject, keys: ["displayWake", "display_wake"]) ?? false,
             keepAwake: firstBoolValue(in: capabilitiesObject, keys: ["keepAwake", "keep_awake"]) ?? false,
-            hostBrowserLogin: firstBoolValue(in: capabilitiesObject, keys: ["hostBrowserLogin", "host_browser_login"]) ?? false
+            hostBrowserLogin: firstBoolValue(in: capabilitiesObject, keys: ["hostBrowserLogin", "host_browser_login"]) ?? false,
+            terminal: firstBoolValue(in: capabilitiesObject, keys: ["terminal", "sshTerminal", "ssh_terminal"]) ?? false
         )
     }
 

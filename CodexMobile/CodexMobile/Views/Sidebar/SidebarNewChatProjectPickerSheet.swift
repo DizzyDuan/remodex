@@ -1,5 +1,6 @@
 // FILE: SidebarNewChatProjectPickerSheet.swift
-// Purpose: Minimal "Start new chat" sheet that lets the user pick a project, worktree, or cloud chat.
+// Purpose: Minimal "Start new chat" sheet that lets the user pick a project,
+//          worktree, and optionally Quick Chat.
 // Layer: View
 // Exports: SidebarNewChatProjectPickerSheet
 // Depends on: SidebarProjectChoice, AppFont, CodexWorktreeIcon
@@ -8,6 +9,7 @@ import SwiftUI
 
 struct SidebarNewChatProjectPickerSheet: View {
     let choices: [SidebarProjectChoice]
+    var showsWithoutProjectOption = true
     let onSelectProject: (String) -> Void
     let onSelectWorktreeProject: (String) -> Void
     let onSelectWithoutProject: () -> Void
@@ -24,7 +26,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                     } label: {
                         projectRow(
                             icon: AnyView(
-                                Image(systemName: "folder.badge.plus")
+                                RemodexIcon.image(systemName: "folder.badge.plus")
                                     .font(AppFont.body(weight: .medium))
                                     .foregroundStyle(.secondary)
                             ),
@@ -53,7 +55,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                                             if choice.iconSystemName == "arrow.triangle.branch" {
                                                 CodexWorktreeIcon(pointSize: 16, weight: .medium)
                                             } else {
-                                                Image(systemName: choice.iconSystemName)
+                                                RemodexIcon.image(systemName: choice.iconSystemName)
                                                     .font(AppFont.body(weight: .medium))
                                             }
                                         }
@@ -87,22 +89,24 @@ struct SidebarNewChatProjectPickerSheet: View {
                     }
                 }
 
-                Section {
-                    Button {
-                        dismiss()
-                        onSelectWithoutProject()
-                    } label: {
-                        projectRow(
-                            icon: AnyView(
-                                Image(systemName: "cloud")
-                                    .font(AppFont.body(weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            ),
-                            title: "Cloud",
-                            subtitle: "Start a chat without a working directory."
-                        )
+                if showsWithoutProjectOption {
+                    Section {
+                        Button {
+                            dismiss()
+                            onSelectWithoutProject()
+                        } label: {
+                            projectRow(
+                                icon: AnyView(
+                                    RemodexIcon.image(systemName: "bubble.left.and.bubble.right")
+                                        .font(AppFont.body(weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                ),
+                                title: "Quick Chat",
+                                subtitle: "Start a chat without a working directory."
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .listStyle(.insetGrouped)
@@ -143,7 +147,7 @@ struct SidebarNewChatProjectPickerSheet: View {
                 }
             }
 
-            Image(systemName: "chevron.right")
+            RemodexIcon.image(systemName: "chevron.right")
                 .font(AppFont.caption(weight: .semibold))
                 .foregroundStyle(.tertiary)
         }

@@ -54,6 +54,14 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         XCTAssertFalse(subagentsState.isSendDisabled)
     }
 
+    func testSendEnabledWhenOnlyStructuredMentionIsSelected() {
+        let skillState = makeState(trimmedInput: "", hasReadyImages: false, hasSkillSelection: true)
+        XCTAssertFalse(skillState.isSendDisabled)
+
+        let pluginState = makeState(trimmedInput: "", hasReadyImages: false, hasPluginSelection: true)
+        XCTAssertFalse(pluginState.isSendDisabled)
+    }
+
     func testSendDisabledWhileReviewSelectionIsWaitingForTarget() {
         let reviewState = makeState(
             trimmedInput: "follow up",
@@ -62,6 +70,15 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
             hasPendingReviewSelection: true
         )
         XCTAssertTrue(reviewState.isSendDisabled)
+    }
+
+    func testRunningComposerSendButtonContentPredicate() {
+        XCTAssertFalse(makeAccessoryState().hasSendableContent(input: ""))
+        XCTAssertFalse(makeAccessoryState().hasSendableContent(input: "   "))
+
+        XCTAssertTrue(makeAccessoryState().hasSendableContent(input: "follow up"))
+        XCTAssertTrue(makeAccessoryState(hasAttachment: true).hasSendableContent(input: ""))
+        XCTAssertTrue(makeAccessoryState(hasSkillSelection: true).hasSendableContent(input: ""))
     }
 
     func testSendTurnRestoresRawDraftWhenStartTurnFails() async {
@@ -93,6 +110,101 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         XCTAssertEqual(viewModel.composerMentionedFiles, [rawMention])
         XCTAssertEqual(viewModel.readyComposerAttachments, [attachment])
         XCTAssertEqual(viewModel.composerAttachments.count, 1)
+    }
+
+    func testLocalDraftRestoresComposerStateForSameThread() {
+        let service = makeService()
+        let firstViewModel = TurnViewModel()
+        let attachment = CodexImageAttachment(
+            thumbnailBase64JPEG: "thumb",
+            payloadDataURL: "data:image/jpeg;base64,AAAA"
+        )
+
+        firstViewModel.input = "Draft with @TurnView.swift"
+        firstViewModel.composerMentionedFiles = [
+            TurnComposerMentionedFile(fileName: "TurnView.swift", path: "Views/Turn/TurnView.swift")
+        ]
+        firstViewModel.composerMentionedSkills = [
+            TurnComposerMentionedSkill(name: "check-code", path: "/skills/check-code/SKILL.md", description: "Review")
+        ]
+        firstViewModel.composerMentionedPlugins = [
+            TurnComposerMentionedPlugin(name: "github", path: "plugin://github", displayName: "GitHub")
+        ]
+        firstViewModel.composerAttachments = [
+            TurnComposerImageAttachment(id: "attachment-1", state: .ready(attachment))
+        ]
+        firstViewModel.isPlanModeArmed = true
+        firstViewModel.isSubagentsSelectionArmed = true
+        firstViewModel.saveLocalDraft(codex: service, threadID: "thread-draft")
+
+        let secondViewModel = TurnViewModel()
+        secondViewModel.restoreSavedLocalDraftIfNeeded(codex: service, threadID: "thread-draft")
+
+        XCTAssertEqual(secondViewModel.input, firstViewModel.input)
+        XCTAssertEqual(secondViewModel.composerMentionedFiles, firstViewModel.composerMentionedFiles)
+        XCTAssertEqual(secondViewModel.composerMentionedSkills, firstViewModel.composerMentionedSkills)
+        XCTAssertEqual(secondViewModel.composerMentionedPlugins, firstViewModel.composerMentionedPlugins)
+        XCTAssertEqual(secondViewModel.readyComposerAttachments, [attachment])
+        XCTAssertTrue(secondViewModel.isPlanModeArmed)
+        XCTAssertTrue(secondViewModel.isSubagentsSelectionArmed)
+    }
+
+    func testLocalDraftReflectsRemovedAttachment() {
+        let service = makeService()
+        let viewModel = TurnViewModel()
+        let attachment = CodexImageAttachment(
+            thumbnailBase64JPEG: "thumb",
+            payloadDataURL: "data:image/jpeg;base64,AAAA"
+        )
+
+        viewModel.input = "Keep the text only"
+        viewModel.composerAttachments = [
+            TurnComposerImageAttachment(id: "attachment-1", state: .ready(attachment))
+        ]
+        viewModel.saveLocalDraft(codex: service, threadID: "thread-draft-removal")
+
+        viewModel.removeComposerAttachment(id: "attachment-1")
+        viewModel.saveLocalDraft(codex: service, threadID: "thread-draft-removal")
+
+        XCTAssertEqual(service.composerDraft(for: "thread-draft-removal")?.input, "Keep the text only")
+        XCTAssertEqual(service.composerDraft(for: "thread-draft-removal")?.attachments, [])
+    }
+
+    func testLocalDraftClearsAfterSuccessfulSend() async {
+        let service = makeService()
+        service.isConnected = true
+        service.requestTransportOverride = { method, _ in
+            XCTAssertEqual(method, "turn/start")
+            return RPCMessage(
+                id: .string(UUID().uuidString),
+                result: .object(["turnId": .string("turn-sent")]),
+                includeJSONRPC: false
+            )
+        }
+
+        let viewModel = TurnViewModel()
+        viewModel.input = "Send this"
+        viewModel.saveLocalDraft(codex: service, threadID: "thread-draft-clear")
+
+        viewModel.sendTurn(codex: service, threadID: "thread-draft-clear")
+        await waitForSendCompletion(viewModel)
+
+        XCTAssertNil(service.composerDraft(for: "thread-draft-clear"))
+    }
+
+    func testLocalDraftSurvivesFailedSend() async {
+        let service = makeService()
+        service.isConnected = true
+
+        let viewModel = TurnViewModel()
+        viewModel.input = "Retry this later"
+        viewModel.saveLocalDraft(codex: service, threadID: "thread-draft-failure")
+
+        viewModel.sendTurn(codex: service, threadID: "thread-draft-failure")
+        await waitForSendCompletion(viewModel)
+
+        XCTAssertEqual(service.composerDraft(for: "thread-draft-failure")?.input, "Retry this later")
+        XCTAssertEqual(viewModel.input, "Retry this later")
     }
 
     func testSendTurnUsesCannedPromptWhenSubagentsChipIsSelected() async {
@@ -252,6 +364,8 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         trimmedInput: String = "hello",
         hasReadyImages: Bool = false,
         hasBlockingAttachmentState: Bool = false,
+        hasSkillSelection: Bool = false,
+        hasPluginSelection: Bool = false,
         hasReviewSelection: Bool = false,
         hasPendingReviewSelection: Bool = false,
         hasSubagentsSelection: Bool = false
@@ -262,9 +376,41 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
             trimmedInput: trimmedInput,
             hasReadyImages: hasReadyImages,
             hasBlockingAttachmentState: hasBlockingAttachmentState,
+            hasSkillSelection: hasSkillSelection,
+            hasPluginSelection: hasPluginSelection,
             hasReviewSelection: hasReviewSelection,
             hasPendingReviewSelection: hasPendingReviewSelection,
             hasSubagentsSelection: hasSubagentsSelection
+        )
+    }
+
+    private func makeAccessoryState(
+        hasAttachment: Bool = false,
+        hasSkillSelection: Bool = false
+    ) -> TurnComposerAccessoryState {
+        let attachment = CodexImageAttachment(
+            thumbnailBase64JPEG: "thumb",
+            payloadDataURL: "data:image/jpeg;base64,AAAA"
+        )
+
+        return TurnComposerAccessoryState(
+            queuedDrafts: [],
+            canSteerQueuedDrafts: false,
+            canRestoreQueuedDrafts: false,
+            steeringDraftID: nil,
+            composerAttachments: hasAttachment ? [
+                TurnComposerImageAttachment(id: "attachment-1", state: .ready(attachment))
+            ] : [],
+            composerMentionedFiles: [],
+            composerMentionedSkills: hasSkillSelection ? [
+                TurnComposerMentionedSkill(name: "check-code", path: "/skills/check-code/SKILL.md", description: "Review")
+            ] : [],
+            composerMentionedPlugins: [],
+            composerReviewSelection: nil,
+            isSubagentsSelectionArmed: false,
+            isVoiceRecording: false,
+            voiceAudioLevels: [],
+            voiceRecordingDuration: 0
         )
     }
 
@@ -289,6 +435,7 @@ final class TurnComposerSendAvailabilityTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let service = CodexService(defaults: defaults)
         service.messagesByThread = [:]
+        service.composerDraftsByThreadID = [:]
 
         // CodexService currently crashes while deallocating in unit-test environment.
         // Keep instances alive for process lifetime so assertions remain deterministic.

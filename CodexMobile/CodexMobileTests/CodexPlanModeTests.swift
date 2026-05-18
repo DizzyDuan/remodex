@@ -370,7 +370,7 @@ final class CodexPlanModeTests: XCTestCase {
 
             default:
                 XCTFail("Unexpected method \(method)")
-                return RPCMessage(id: .string(UUID().uuidString), method: "noop", includeJSONRPC: false)
+                return RPCMessage(id: .string(UUID().uuidString), method: method, includeJSONRPC: false)
             }
         }
 
@@ -1166,13 +1166,16 @@ final class CodexPlanModeTests: XCTestCase {
             )
             XCTFail("Expected cancelStructuredPlanSession to throw")
         } catch let error as CodexServiceError {
-            XCTAssertEqual(error, .disconnected)
+            guard case .disconnected = error else {
+                XCTFail("Unexpected CodexServiceError: \(error)")
+                return
+            }
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
 
         XCTAssertEqual(service.messages(for: threadID).filter { $0.kind == .userInputPrompt }.count, 1)
-        XCTAssertEqual(service.currentPlanSessionSource(for: threadID), .native)
+        XCTAssertTrue(service.currentPlanSessionSource(for: threadID)?.isNative == true)
     }
 
     func testDismissStructuredPlanPromptFailureKeepsPromptVisible() async {
@@ -1228,7 +1231,7 @@ final class CodexPlanModeTests: XCTestCase {
         XCTAssertFalse(viewModel.isStructuredPlanPromptDismissed(requestID, codex: service))
         XCTAssertFalse(viewModel.isStructuredPlanPromptDismissing(requestID, codex: service))
         XCTAssertEqual(service.messages(for: threadID).filter { $0.kind == .userInputPrompt }.count, 1)
-        XCTAssertEqual(service.currentPlanSessionSource(for: threadID), .native)
+        XCTAssertTrue(service.currentPlanSessionSource(for: threadID)?.isNative == true)
         XCTAssertEqual(service.lastErrorMessage, service.userFacingTurnErrorMessage(from: CodexServiceError.disconnected))
     }
 

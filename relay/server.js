@@ -60,7 +60,7 @@ function createRelayServer({
     const loggedPathname = redactRelayPathname(pathname);
     console.log(
       `[relay] upgrade request path=${loggedPathname} remote=${clientAddressKey(req, { trustProxy })} `
-      + `role=${readHeaderString(req.headers["x-role"]) || "missing"}`
+      + `role=${readUpgradeRole(req) || "missing"}`
     );
     if (!pathname.startsWith("/relay/")) {
       console.log(`[relay] rejecting upgrade for non-relay path: ${loggedPathname}`);
@@ -147,11 +147,11 @@ async function handleHTTPRequest(req, res, {
     return handleJSONRoute(req, res, async (body) => pushSessionService.notifyCompletion(body));
   }
 
-  if (req.method === "POST" && pathname === "/v1/trusted/session/resolve") {
+  if (req.method === "POST" && isRelayHTTPAPIPath(pathname, "/v1/trusted/session/resolve")) {
     return handleJSONRoute(req, res, async (body) => resolveTrustedMacSession(body));
   }
 
-  if (req.method === "POST" && pathname === "/v1/pairing/code/resolve") {
+  if (req.method === "POST" && isRelayHTTPAPIPath(pathname, "/v1/pairing/code/resolve")) {
     return handleJSONRoute(req, res, async (body) => resolvePairingCode(body));
   }
 
@@ -227,6 +227,11 @@ function writeRateLimitResponse(res) {
     error: "Too many requests",
     code: "rate_limited",
   });
+}
+
+function isRelayHTTPAPIPath(pathname, routePath) {
+  // Supports relays mounted at the domain root or under /relay by a local proxy.
+  return pathname === routePath || pathname === `/relay${routePath}`;
 }
 
 function createDisabledPushSessionService() {
@@ -324,6 +329,19 @@ function forwardedClientAddress(req) {
 function readHeaderString(value) {
   const candidate = Array.isArray(value) ? value[0] : value;
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : "";
+}
+
+function readUpgradeRole(req) {
+  const headerRole = readHeaderString(req?.headers?.["x-role"]);
+  if (headerRole) {
+    return headerRole;
+  }
+
+  try {
+    return readHeaderString(new URL(req?.url || "/", "http://localhost").searchParams.get("role"));
+  } catch {
+    return "";
+  }
 }
 
 // Reads an opt-in boolean flag for hosted deployments without changing local/self-host defaults.

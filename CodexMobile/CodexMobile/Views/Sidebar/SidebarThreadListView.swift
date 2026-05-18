@@ -1,5 +1,5 @@
 // FILE: SidebarThreadListView.swift
-// Purpose: Renders sidebar thread groups and empty states.
+// Purpose: Renders sidebar project/rootless thread groups and empty states.
 // Layer: View Component
 // Exports: SidebarThreadListView
 
@@ -13,8 +13,11 @@ struct SidebarThreadListView: View {
     let groups: [SidebarThreadGroup]
     let selectedThread: CodexThread?
     let bottomContentInset: CGFloat
+    var emptyStateTitle: String = "No conversations"
+    var emptyFilterTitle: String = "No matching conversations"
+    var projectlessRootPaths: [String] = []
     let timingLabelProvider: (CodexThread) -> String?
-    let diffTotalsByThreadID: [String: TurnSessionDiffTotals]
+    var showsTimestampRefreshIndicator: (CodexThread) -> Bool = { _ in false }
     let runBadgeStateByThreadID: [String: CodexThreadRunBadgeState]
     let onSelectThread: (CodexThread) -> Void
     let onCreateThreadInProjectGroup: (SidebarThreadGroup) -> Void
@@ -29,38 +32,35 @@ struct SidebarThreadListView: View {
     @State private var expandedProjectGroupIDs: Set<String> = []
     @State private var knownProjectGroupIDs: Set<String> = []
     @State private var hasInitializedProjectGroupExpansion = false
-    @State private var isArchivedExpanded = false
     @State private var isPinnedExpanded = true
+    @State private var isChatGroupExpanded = true
     @State private var expandedSubagentParentIDs: Set<String> = []
     // Tracks project sections whose preview cap was manually lifted with Show more.
     @State private var revealedProjectGroupIDs: Set<String> = []
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
 
-                if threads.isEmpty && !isFiltering {
-                    Text(isConnected ? "No conversations" : "Connect to view conversations")
-                        .foregroundStyle(.secondary)
-                        .font(AppFont.subheadline())
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
-                } else if groups.flatMap(\.threads).isEmpty && isFiltering {
-                    Text("No matching conversations")
-                        .foregroundStyle(.secondary)
-                        .font(AppFont.subheadline())
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
-                } else {
-                    ForEach(groups) { group in
-                        groupSection(group)
-                    }
+            if threads.isEmpty && !isFiltering {
+                Text(isConnected ? emptyStateTitle : "Connect to view conversations")
+                    .foregroundStyle(.secondary)
+                    .font(AppFont.subheadline())
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+            } else if groups.flatMap(\.threads).isEmpty && isFiltering {
+                Text(emptyFilterTitle)
+                    .foregroundStyle(.secondary)
+                    .font(AppFont.subheadline())
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+            } else {
+                ForEach(groups) { group in
+                    groupSection(group)
                 }
             }
-            // Keeps the last rows reachable above the floating settings control.
-            .padding(.bottom, bottomContentInset)
         }
-        .scrollDismissesKeyboard(.interactively)
+        // Keeps the last rows reachable above the floating settings control.
+        .padding(.bottom, bottomContentInset)
         .task(id: visibleSubagentThreadIDs) {
             await codex.loadSubagentThreadMetadataIfNeeded(threadIds: visibleSubagentThreadIDs)
         }
@@ -93,9 +93,8 @@ struct SidebarThreadListView: View {
             pinnedGroupSection(group)
         case .project:
             projectGroupSection(group)
-
-        case .archived:
-            archivedGroupSection(group)
+        case .chat:
+            chatGroupSection(group)
         }
     }
 
@@ -103,53 +102,58 @@ struct SidebarThreadListView: View {
         let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
 
         return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isPinnedExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "pin")
-                        .font(AppFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                    Text(group.label)
-                        .font(AppFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.caption(weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isPinnedExpanded ? 90 : 0))
-                        .animation(.easeInOut(duration: 0.2), value: isPinnedExpanded)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 10)
-
-            if isPinnedExpanded {
-                VStack(spacing: 2) {
-                    ForEach(hierarchy.rootThreads) { thread in
-                        threadRowTree(
-                            thread,
-                            childrenByParentID: hierarchy.childrenByParentID,
-                            pinnedRootThreadIDs: Set(hierarchy.rootThreads.map(\.id))
-                        )
+            SidebarPinnedSectionHeader(
+                label: group.label,
+                isExpanded: isPinnedExpanded,
+                onToggle: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isPinnedExpanded.toggle()
                     }
                 }
-                .padding(.leading, -8)
-                .padding(.bottom, 14)
-                .transition(.opacity)
+            )
+
+            if isPinnedExpanded {
+                SidebarThreadGroupBlock(bottomPadding: 0) {
+                    VStack(spacing: 2) {
+                        ForEach(hierarchy.rootThreads) { thread in
+                            threadRowTree(
+                                thread,
+                                childrenByParentID: hierarchy.childrenByParentID,
+                                pinnedRootThreadIDs: Set(hierarchy.rootThreads.map(\.id))
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 
     private func projectGroupSection(_ group: SidebarThreadGroup) -> some View {
+        let isExpanded = expandedProjectGroupIDs.contains(group.id)
+
+        // Skip the hierarchy / preview-cap calculations entirely when the
+        // group is collapsed. They were previously recomputed on every body
+        // pass (selection changes, badge updates, etc.) for every project in
+        // the sidebar, which dominated scroll/expand jank for users with many
+        // projects.
+        return VStack(alignment: .leading, spacing: 0) {
+            projectHeader(group)
+                .padding(.horizontal)
+
+            if isExpanded {
+                // Insertion transition is owned by `SidebarThreadGroupBlock`;
+                // the surrounding `withAnimation` in
+                // `toggleProjectGroupExpansion` still drives the height fold.
+                expandedProjectContent(group)
+            }
+        }
+        // `.clipped()` keeps the disappearing rows from briefly painting over
+        // the next project header while SwiftUI animates the height delta.
+        .clipped()
+    }
+
+    @ViewBuilder
+    private func expandedProjectContent(_ group: SidebarThreadGroup) -> some View {
         let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
         let visibleRootThreads = SidebarProjectThreadPreviewState.visibleRootThreads(
             for: group,
@@ -164,172 +168,84 @@ struct SidebarThreadListView: View {
             manuallyExpandedGroupIDs: revealedProjectGroupIDs
         )
 
-        return VStack(alignment: .leading, spacing: 0) {
-            projectHeader(group)
+        // `bottomPadding: 0` keeps the gap between two adjacent project
+        // sections constant regardless of whether the upper one is expanded
+        // or collapsed — the next project header already provides the
+        // spacing via its `.padding(.top, 18)`. Without this, an expanded
+        // section added ~14pt of extra margin under its card, making the
+        // sidebar visually "jump" each time a folder was toggled.
+        SidebarThreadGroupBlock(bottomPadding: 0) {
+            VStack(spacing: 2) {
+                ForEach(visibleRootThreads) { thread in
+                    threadRowTree(
+                        thread,
+                        childrenByParentID: hierarchy.childrenByParentID
+                    )
+                }
 
-            if expandedProjectGroupIDs.contains(group.id) {
-                VStack(spacing: 2) {
-                    ForEach(visibleRootThreads) { thread in
-                        threadRowTree(
-                            thread,
-                            childrenByParentID: hierarchy.childrenByParentID
-                        )
-                    }
-
-                    if shouldShowMoreButton {
-                        let totalRootCount = SidebarProjectThreadPreviewState.rootThreads(in: group.threads).count
-                        let hiddenCount = totalRootCount - visibleRootThreads.count
-                        projectGroupShowMoreButton(group, hiddenCount: hiddenCount)
+                if shouldShowMoreButton {
+                    let totalRootCount = SidebarProjectThreadPreviewState.rootThreads(in: group.threads).count
+                    let hiddenCount = totalRootCount - visibleRootThreads.count
+                    SidebarProjectShowMoreButton(hiddenCount: hiddenCount) {
+                        revealedProjectGroupIDs.insert(group.id)
                     }
                 }
-                .padding(.bottom, 14)
-                .transition(.opacity)
             }
         }
-    }
-
-    @State private var showMoreChevronRotated = false
-
-    private func projectGroupShowMoreButton(_ group: SidebarThreadGroup, hiddenCount: Int) -> some View {
-        HStack {
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showMoreChevronRotated = true
-                    revealedProjectGroupIDs.insert(group.id)
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(hiddenCount > 0 ? "Show \(hiddenCount) more" : "Show more")
-                    Image(systemName: "chevron.down")
-                        .font(AppFont.system(size: 10, weight: .semibold))
-                        .rotationEffect(.degrees(showMoreChevronRotated ? 180 : 0))
-                }
-                .font(AppFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, 48)
-        .padding(.top, 6)
-        .onAppear { showMoreChevronRotated = false }
     }
 
     private func projectHeader(_ group: SidebarThreadGroup) -> some View {
-        let isExpanded = expandedProjectGroupIDs.contains(group.id)
-
-        return HStack(spacing: 12) {
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                toggleProjectGroupExpansion(group.id)
-            } label: {
-                HStack(spacing: 8) {
-                    if group.iconSystemName == "arrow.triangle.branch" {
-                        CodexWorktreeIcon(pointSize: 16, weight: .medium)
-                            .foregroundStyle(.primary)
-                    } else {
-                        Image(systemName: group.iconSystemName)
-                            .font(AppFont.body(weight: .medium))
-                            .foregroundStyle(.primary)
-                    }
-                    Text(group.label)
-                        .font(AppFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                if let onArchiveProjectGroup {
-                    Button {
-                        HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                        onArchiveProjectGroup(group)
-                    } label: {
-                        Label("Archive Project", systemImage: "archivebox")
-                    }
-                }
-
-                if let onDeleteProjectGroup {
-                    Button(role: .destructive) {
-                        HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                        onDeleteProjectGroup(group)
-                    } label: {
-                        Label("Remove from Phone", systemImage: "trash")
-                    }
-                }
-            }
-
-            HStack(spacing: 8) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(AppFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14, height: 14)
-                    .animation(.easeInOut(duration: 0.2), value: isExpanded)
-
-                Button {
-                    HapticFeedback.shared.triggerImpactFeedback()
-                    onCreateThreadInProjectGroup(group)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(AppFont.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 30, height: 30)
-                        .background(Color.primary.opacity(0.08), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!isConnected || isCreatingThread)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 18)
-        .padding(.bottom, 10)
+        SidebarProjectSectionHeader(
+            group: group,
+            isExpanded: expandedProjectGroupIDs.contains(group.id),
+            isConnected: isConnected,
+            isCreatingThread: isCreatingThread,
+            onToggle: { toggleProjectGroupExpansion(group.id) },
+            onCreate: { onCreateThreadInProjectGroup(group) },
+            onArchive: onArchiveProjectGroup.map { handler in { handler(group) } },
+            onDelete: onDeleteProjectGroup.map { handler in { handler(group) } }
+        )
     }
 
-    private func archivedGroupSection(_ group: SidebarThreadGroup) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isArchivedExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "archivebox")
-                        .font(AppFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                    Text(group.label)
-                        .font(AppFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(AppFont.caption(weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isArchivedExpanded ? 90 : 0))
-                        .animation(.easeInOut(duration: 0.2), value: isArchivedExpanded)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .padding(.top, 18)
-            .padding(.bottom, 10)
+    // Rootless chats reuse the project header so the icon + label + new-chat
+    // affordance reads consistently. Toggling collapses just this section; the
+    // create button calls back into the parent's rootless chat creator.
+    private func chatGroupSection(_ group: SidebarThreadGroup) -> some View {
+        let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
 
-            if isArchivedExpanded {
-                VStack(spacing: 4) {
-                    ForEach(group.threads) { thread in
-                        threadRow(thread)
+        return VStack(alignment: .leading, spacing: 0) {
+            SidebarProjectSectionHeader(
+                group: group,
+                isExpanded: isChatGroupExpanded,
+                isConnected: isConnected,
+                isCreatingThread: isCreatingThread,
+                onToggle: {
+                    withAnimation(.snappy(duration: 0.22)) {
+                        isChatGroupExpanded.toggle()
+                    }
+                },
+                onCreate: { onCreateThreadInProjectGroup(group) }
+            )
+            .padding(.horizontal)
+
+            if isChatGroupExpanded {
+                // Same `bottomPadding: 0` rationale as project sections:
+                // the next sibling header owns the inter-section spacing,
+                // so expanding/collapsing the rootless Chats block should
+                // not shift everything below it.
+                SidebarThreadGroupBlock(bottomPadding: 0) {
+                    VStack(spacing: 2) {
+                        ForEach(hierarchy.rootThreads) { thread in
+                            threadRowTree(
+                                thread,
+                                childrenByParentID: hierarchy.childrenByParentID
+                            )
+                        }
                     }
                 }
-                .padding(.bottom, 14)
-                .transition(.opacity)
             }
         }
+        .clipped()
     }
 
     private func threadRowTree(
@@ -368,8 +284,12 @@ struct SidebarThreadListView: View {
                         }
                     }
                 }
+                // Match project-group expansion: fade the inserted rows while the
+                // outer stack animates height, instead of sliding through siblings.
+                .transition(.opacity)
             }
-        })
+        }
+        .clipped())
     }
 
     private func threadRow(
@@ -386,9 +306,14 @@ struct SidebarThreadListView: View {
             isSelected: isSelected,
             runBadgeState: runBadgeStateByThreadID[thread.id],
             timingLabel: timingLabelProvider(thread),
-            diffTotals: diffTotalsByThreadID[thread.id],
+            showsTimestampRefreshIndicator: showsTimestampRefreshIndicator(thread),
             isPinned: codex.isThreadPinned(thread.id),
-            pinnedProjectLabel: isPinnedRow ? thread.projectDisplayName : nil,
+            pinnedProjectLabel: isPinnedRow && !SidebarThreadGrouping.isRootlessChatThread(
+                thread,
+                projectlessRootPaths: projectlessRootPaths
+            )
+                ? thread.projectDisplayName
+                : nil,
             childSubagentCount: childSubagentCount,
             isSubagentExpanded: isSubagentExpanded,
             onToggleSubagents: onToggleSubagents,
@@ -440,10 +365,16 @@ struct SidebarThreadListView: View {
                         into: &visibleThreadIDs
                     )
                 }
-            case .archived:
-                guard isArchivedExpanded else { continue }
-                for thread in group.threads where thread.isSubagent {
-                    visibleThreadIDs.append(thread.id)
+            case .chat:
+                guard isChatGroupExpanded else { continue }
+                let hierarchy = SidebarSubagentHierarchy(groupThreads: group.threads)
+                for rootThread in hierarchy.rootThreads {
+                    collectVisibleSubagentThreadIDs(
+                        from: rootThread,
+                        childrenByParentID: hierarchy.childrenByParentID,
+                        ancestorThreadIDs: [],
+                        into: &visibleThreadIDs
+                    )
                 }
             }
         }
@@ -483,20 +414,22 @@ struct SidebarThreadListView: View {
     }
 
     private func toggleProjectGroupExpansion(_ groupID: String) {
-        var persistedCollapsedGroupIDs = SidebarProjectExpansionState.decodePersistedGroupIDs(
-            collapsedProjectGroupIDsStorage
-        )
-        if expandedProjectGroupIDs.contains(groupID) {
-            expandedProjectGroupIDs.remove(groupID)
-            revealedProjectGroupIDs.remove(groupID)
-            persistedCollapsedGroupIDs.insert(groupID)
-        } else {
-            expandedProjectGroupIDs.insert(groupID)
-            persistedCollapsedGroupIDs.remove(groupID)
+        withAnimation(.snappy(duration: 0.22)) {
+            var persistedCollapsedGroupIDs = SidebarProjectExpansionState.decodePersistedGroupIDs(
+                collapsedProjectGroupIDsStorage
+            )
+            if expandedProjectGroupIDs.contains(groupID) {
+                expandedProjectGroupIDs.remove(groupID)
+                revealedProjectGroupIDs.remove(groupID)
+                persistedCollapsedGroupIDs.insert(groupID)
+            } else {
+                expandedProjectGroupIDs.insert(groupID)
+                persistedCollapsedGroupIDs.remove(groupID)
+            }
+            collapsedProjectGroupIDsStorage = SidebarProjectExpansionState.encodePersistedGroupIDs(
+                persistedCollapsedGroupIDs
+            )
         }
-        collapsedProjectGroupIDsStorage = SidebarProjectExpansionState.encodePersistedGroupIDs(
-            persistedCollapsedGroupIDs
-        )
     }
 
     // Keep project sections expanded after regrouping so live updates do not collapse the sidebar.
@@ -542,10 +475,12 @@ struct SidebarThreadListView: View {
     }
 
     private func toggleSubagentExpansion(parentThreadID: String) {
-        if expandedSubagentParentIDs.contains(parentThreadID) {
-            expandedSubagentParentIDs.remove(parentThreadID)
-        } else {
-            expandedSubagentParentIDs.insert(parentThreadID)
+        withAnimation(.snappy(duration: 0.22)) {
+            if expandedSubagentParentIDs.contains(parentThreadID) {
+                expandedSubagentParentIDs.remove(parentThreadID)
+            } else {
+                expandedSubagentParentIDs.insert(parentThreadID)
+            }
         }
     }
 
@@ -569,206 +504,120 @@ struct SidebarThreadListView: View {
     }
 }
 
-enum SidebarProjectThreadPreviewState {
-    static let collapsedRootThreadLimit = 6
+// MARK: - Preview fixtures (UI iteration)
+//
+// Mirrors the screenshot layout: a Pinned section and two project sections
+// (`omnara-voice` and `phodex-bridge`) with several chats each. Edit
+// `SidebarThreadGroupBlock` to iterate on the block look; this preview will
+// reflect changes without needing to launch the simulator.
 
-    // Caps each project section to the latest root conversations until the user expands it.
-    static func visibleRootThreads(
-        for group: SidebarThreadGroup,
-        selectedThread: CodexThread?,
-        isFiltering: Bool,
-        manuallyExpandedGroupIDs: Set<String>
-    ) -> [CodexThread] {
-        let rootThreads = rootThreads(in: group.threads)
-        if shouldRevealAllRootThreads(
-            for: group,
-            rootThreads: rootThreads,
-            selectedThread: selectedThread,
-            isFiltering: isFiltering,
-            manuallyExpandedGroupIDs: manuallyExpandedGroupIDs
-        ) {
-            return rootThreads
-        }
+private enum SidebarThreadListPreviewFixtures {
+    static let now = Date()
 
-        return Array(rootThreads.prefix(collapsedRootThreadLimit))
+    static func ago(_ minutes: Int) -> Date {
+        now.addingTimeInterval(TimeInterval(-minutes * 60))
     }
 
-    static func shouldShowMoreButton(
-        for group: SidebarThreadGroup,
-        selectedThread: CodexThread?,
-        isFiltering: Bool,
-        manuallyExpandedGroupIDs: Set<String>
-    ) -> Bool {
-        let rootThreads = rootThreads(in: group.threads)
-        guard group.kind == .project,
-              rootThreads.count > collapsedRootThreadLimit,
-              !isFiltering,
-              !manuallyExpandedGroupIDs.contains(group.id) else {
-            return false
-        }
+    static let pinnedThread = CodexThread(
+        id: "pinned-1",
+        title: "Investigate flaky tests",
+        createdAt: ago(720),
+        updatedAt: ago(8),
+        cwd: "/Users/dev/phodex-bridge"
+    )
 
-        return !selectedThreadRequiresExpansion(
-            selectedThread,
-            in: group,
-            rootThreads: rootThreads
-        )
-    }
+    static let omnaraThreads: [CodexThread] = [
+        CodexThread(id: "om-1", title: "Create Landing Page with AI Stuff", createdAt: ago(180), updatedAt: ago(2), cwd: "/Users/dev/omnara-voice"),
+        CodexThread(id: "om-2", title: "Create Landing Page with AI Stuff", createdAt: ago(170), updatedAt: ago(2), cwd: "/Users/dev/omnara-voice"),
+        CodexThread(id: "om-3", title: "Landing Page", createdAt: ago(160), updatedAt: ago(2), cwd: "/Users/dev/omnara-voice"),
+        CodexThread(id: "om-4", title: "App's UI", createdAt: ago(150), updatedAt: ago(2), cwd: "/Users/dev/omnara-voice"),
+        CodexThread(id: "om-5", title: "Backend", createdAt: ago(140), updatedAt: ago(2), cwd: "/Users/dev/omnara-voice"),
+    ]
 
-    // Root order matches the sidebar tree order, so previewing keeps parent/subagent layout stable.
-    static func rootThreads(in groupThreads: [CodexThread]) -> [CodexThread] {
-        let groupThreadIDs = Set(groupThreads.map(\.id))
-        return groupThreads.filter { thread in
-            guard let parentThreadID = thread.parentThreadId else {
-                return true
-            }
+    static let bridgeThreads: [CodexThread] = [
+        CodexThread(id: "br-1", title: "Investigate flaky tests", createdAt: ago(800), updatedAt: ago(8), cwd: "/Users/dev/phodex-bridge"),
+        CodexThread(id: "br-2", title: "Refactor relay session store", createdAt: ago(900), updatedAt: ago(45), cwd: "/Users/dev/phodex-bridge"),
+        CodexThread(id: "br-3", title: "Wire QR pairing flow", createdAt: ago(1500), updatedAt: ago(220), cwd: "/Users/dev/phodex-bridge"),
+    ]
 
-            return !groupThreadIDs.contains(parentThreadID)
-        }
-    }
+    static let allThreads: [CodexThread] =
+        [pinnedThread] + omnaraThreads + bridgeThreads
 
-    // Keeps the active conversation visible when it would otherwise land below the preview cap.
-    static func selectedThreadRequiresExpansion(
-        _ selectedThread: CodexThread?,
-        in group: SidebarThreadGroup,
-        rootThreads: [CodexThread]? = nil
-    ) -> Bool {
-        guard let selectedThread, group.contains(selectedThread) else {
-            return false
-        }
+    static let groups: [SidebarThreadGroup] = [
+        SidebarThreadGroup(
+            id: "pinned",
+            label: "Pinned",
+            kind: .pinned,
+            sortDate: ago(8),
+            projectPath: nil,
+            threads: [pinnedThread]
+        ),
+        SidebarThreadGroup(
+            id: "/Users/dev/omnara-voice",
+            label: "omnara-voice",
+            kind: .project,
+            sortDate: ago(2),
+            projectPath: "/Users/dev/omnara-voice",
+            threads: omnaraThreads
+        ),
+        SidebarThreadGroup(
+            id: "/Users/dev/phodex-bridge",
+            label: "phodex-bridge",
+            kind: .project,
+            sortDate: ago(8),
+            projectPath: "/Users/dev/phodex-bridge",
+            threads: bridgeThreads
+        ),
+    ]
 
-        let groupRootThreads = rootThreads ?? self.rootThreads(in: group.threads)
-        let visibleRootThreadIDs = Set(groupRootThreads.prefix(collapsedRootThreadLimit).map(\.id))
-        let selectedRootThreadID = rootThreadID(containing: selectedThread, in: group.threads) ?? selectedThread.id
+    static let runBadges: [String: CodexThreadRunBadgeState] = [
+        "om-1": .running,
+        "om-3": .ready,
+        "br-1": .running,
+        "br-2": .ready,
+    ]
 
-        return !visibleRootThreadIDs.contains(selectedRootThreadID)
-    }
-
-    private static func shouldRevealAllRootThreads(
-        for group: SidebarThreadGroup,
-        rootThreads: [CodexThread],
-        selectedThread: CodexThread?,
-        isFiltering: Bool,
-        manuallyExpandedGroupIDs: Set<String>
-    ) -> Bool {
-        guard group.kind == .project, rootThreads.count > collapsedRootThreadLimit else {
-            return true
-        }
-
-        if isFiltering || manuallyExpandedGroupIDs.contains(group.id) {
-            return true
-        }
-
-        return selectedThreadRequiresExpansion(
-            selectedThread,
-            in: group,
-            rootThreads: rootThreads
-        )
-    }
-
-    private static func rootThreadID(containing thread: CodexThread, in groupThreads: [CodexThread]) -> String? {
-        let threadsByID = Dictionary(uniqueKeysWithValues: groupThreads.map { ($0.id, $0) })
-        var currentThread = thread
-        var visitedThreadIDs: Set<String> = [thread.id]
-
-        while let parentThreadID = currentThread.parentThreadId,
-              !visitedThreadIDs.contains(parentThreadID),
-              let parentThread = threadsByID[parentThreadID] {
-            currentThread = parentThread
-            visitedThreadIDs.insert(parentThreadID)
-        }
-
-        return currentThread.id
+    static func timingLabel(for thread: CodexThread) -> String? {
+        guard let updated = thread.updatedAt else { return nil }
+        let seconds = Int(now.timeIntervalSince(updated))
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        return "\(minutes / 60)h"
     }
 }
 
-private struct SidebarSubagentHierarchy {
-    let rootThreads: [CodexThread]
-    let childrenByParentID: [String: [CodexThread]]
-
-    init(groupThreads: [CodexThread]) {
-        let threadsByID = Dictionary(uniqueKeysWithValues: groupThreads.map { ($0.id, $0) })
-        var childrenByParentID: [String: [CodexThread]] = [:]
-        var rootThreads: [CodexThread] = []
-
-        for thread in groupThreads {
-            if let parentThreadID = thread.parentThreadId,
-               threadsByID[parentThreadID] != nil {
-                childrenByParentID[parentThreadID, default: []].append(thread)
-            } else {
-                rootThreads.append(thread)
-            }
-        }
-
-        self.rootThreads = rootThreads
-        self.childrenByParentID = childrenByParentID
-    }
-}
-
-struct SidebarProjectExpansionSnapshot: Equatable {
-    let expandedGroupIDs: Set<String>
-    let knownGroupIDs: Set<String>
-}
-
-enum SidebarProjectExpansionState {
-    // Preserves user collapse choices while still auto-opening project groups that appear for the first time.
-    // This also applies the persisted closed-state to groups that load late from thread/cwd data.
-    static func synchronizedState(
-        currentExpandedGroupIDs: Set<String>,
-        knownGroupIDs: Set<String>,
-        visibleGroups: [SidebarThreadGroup],
-        hasInitialized: Bool,
-        persistedCollapsedGroupIDs: Set<String> = []
-    ) -> SidebarProjectExpansionSnapshot {
-        let visibleGroupIDs = Set(
-            visibleGroups
-                .filter { $0.kind == .project }
-                .map(\.id)
-        )
-        guard hasInitialized else {
-            return SidebarProjectExpansionSnapshot(
-                expandedGroupIDs: visibleGroupIDs.subtracting(persistedCollapsedGroupIDs),
-                knownGroupIDs: visibleGroupIDs
-            )
-        }
-
-        let newGroupIDs = visibleGroupIDs.subtracting(knownGroupIDs)
-        return SidebarProjectExpansionSnapshot(
-            expandedGroupIDs: currentExpandedGroupIDs
-                .intersection(visibleGroupIDs)
-                .union(newGroupIDs.subtracting(persistedCollapsedGroupIDs)),
-            knownGroupIDs: visibleGroupIDs
+@MainActor
+@ViewBuilder
+private func sidebarThreadBlockPreviewBody() -> some View {
+    ScrollView {
+        SidebarThreadListView(
+            isConnected: true,
+            isCreatingThread: false,
+            threads: SidebarThreadListPreviewFixtures.allThreads,
+            groups: SidebarThreadListPreviewFixtures.groups,
+            selectedThread: SidebarThreadListPreviewFixtures.omnaraThreads[2],
+            bottomContentInset: 80,
+            timingLabelProvider: SidebarThreadListPreviewFixtures.timingLabel,
+            runBadgeStateByThreadID: SidebarThreadListPreviewFixtures.runBadges,
+            onSelectThread: { _ in },
+            onCreateThreadInProjectGroup: { _ in },
+            onRenameThread: { _, _ in },
+            onPinToggleThread: { _ in },
+            onArchiveToggleThread: { _ in },
+            onDeleteThread: { _ in }
         )
     }
+    .background(Color(.systemBackground))
+    .environment(CodexService())
+}
 
-    // Finds the project group that owns the current selection so the active thread is not hidden.
-    static func groupIDContainingSelectedThread(_ selectedThread: CodexThread?, in groups: [SidebarThreadGroup]) -> String? {
-        guard let selectedThread else {
-            return nil
-        }
+#Preview("Sidebar Thread Block — Dark") {
+    sidebarThreadBlockPreviewBody()
+        .preferredColorScheme(.dark)
+}
 
-        return groups.first(where: { $0.kind == .project && $0.contains(selectedThread) })?.id
-    }
-
-    static func shouldAutoRevealSelectedGroup(
-        _ groupID: String,
-        persistedCollapsedGroupIDs: Set<String>
-    ) -> Bool {
-        !persistedCollapsedGroupIDs.contains(groupID)
-    }
-
-    static func decodePersistedGroupIDs(_ rawValue: String) -> Set<String> {
-        guard let data = rawValue.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return Set(decoded)
-    }
-
-    static func encodePersistedGroupIDs(_ groupIDs: Set<String>) -> String {
-        guard let data = try? JSONEncoder().encode(groupIDs.sorted()),
-              let encoded = String(data: data, encoding: .utf8) else {
-            return ""
-        }
-        return encoded
-    }
+#Preview("Sidebar Thread Block — Light") {
+    sidebarThreadBlockPreviewBody()
+        .preferredColorScheme(.light)
 }
