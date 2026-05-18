@@ -149,46 +149,12 @@ struct TurnToolbarContent: ToolbarContent {
 
     @ViewBuilder
     private var titleTapTarget: some View {
-        if let context = navigationContext {
-            Button {
-                HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                isShowingPathSheet = true
-            } label: {
-                titleSubtitleBlock(context: context)
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .accessibilityLabel("\(displayTitle), \(context.subtitle)")
-            .accessibilityHint("Opens thread location")
-        } else {
-            titleLabel
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func titleSubtitleBlock(context: TurnThreadNavigationContext) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            titleLabel
-            subtitleLabel(for: context)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .multilineTextAlignment(.leading)
-    }
-
-    private var titleLabel: some View {
-        Text(displayTitle)
-            .font(AppFont.subheadline(weight: .medium))
-            .lineLimit(1)
-            .truncationMode(.tail)
-    }
-
-    private func subtitleLabel(for context: TurnThreadNavigationContext) -> some View {
-        Text(context.subtitle)
-            .font(AppFont.caption(weight: .regular))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
+        TurnChatToolbarTitleLabel(
+            title: displayTitle,
+            subtitle: navigationContext?.subtitle,
+            onTap: navigationContext == nil ? nil : { isShowingPathSheet = true },
+            accessibilityHint: navigationContext == nil ? nil : "Opens thread location"
+        )
     }
 }
 

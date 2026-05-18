@@ -226,8 +226,7 @@ struct UserMessageBubble: View {
                 let color: Color
 
                 if trigger == "@", isConfirmedFileMention {
-                    let fileName = (normalizedToken as NSString).lastPathComponent
-                    displayName = fileName.isEmpty ? normalizedToken : fileName
+                    displayName = normalizedToken.pathDisplayName
                     color = bubbleColor.mentionForeground(for: colorScheme, fallback: .blue)
                 } else if trigger == "@" {
                     displayName = SkillDisplayNameFormatter.displayName(for: normalizedToken)
