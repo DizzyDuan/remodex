@@ -2,7 +2,8 @@
 // Purpose: Shared device naming, status copy, and sort order for sidebar menus
 //          and the devices settings sheet.
 // Layer: View helper
-// Exports: MyDevicesPresentation, MyDeviceRowModel, MyDeviceMenuVisibilityStore
+// Exports: MyDevicesPresentation, MyDeviceRowModel, MyDeviceMenuVisibilityStore,
+//          MyDeviceSwitcherVisibilityStore
 // Depends on: CodexService, SidebarComputerNicknameStore
 
 import Foundation
@@ -26,6 +27,25 @@ struct MyDeviceRowModel: Identifiable {
             return trimmed?.isEmpty == false ? trimmed : nil
         }
         .joined(separator: " · ")
+    }
+}
+
+enum MyDeviceSwitcherVisibilityMode: String, CaseIterable, Identifiable {
+    case automatic
+    case always
+    case hidden
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .always:
+            return "Always"
+        case .hidden:
+            return "Hidden"
+        }
     }
 }
 
@@ -196,5 +216,23 @@ enum MyDeviceMenuVisibilityStore {
             return nil
         }
         return keyPrefix + deviceId
+    }
+}
+
+enum MyDeviceSwitcherVisibilityStore {
+    static let key = "codex.myDevices.switcherVisibilityMode"
+    static let defaultMode = MyDeviceSwitcherVisibilityMode.automatic
+
+    static var mode: MyDeviceSwitcherVisibilityMode {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: key),
+                  let mode = MyDeviceSwitcherVisibilityMode(rawValue: rawValue) else {
+                return defaultMode
+            }
+            return mode
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: key)
+        }
     }
 }

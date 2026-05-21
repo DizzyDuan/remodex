@@ -131,7 +131,7 @@ struct SidebarHeaderView: View {
                     title: "",
                     options: [.displayInline],
                     children: [
-                        overflowAction(title: "Connections", systemName: "desktopcomputer") {
+                        overflowAction(title: "Connections", systemName: "globe") {
                             overflowActions.onOpenConnections()
                         },
                     ]

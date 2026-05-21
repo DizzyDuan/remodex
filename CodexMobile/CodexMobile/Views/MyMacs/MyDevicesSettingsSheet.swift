@@ -1,6 +1,6 @@
 // FILE: MyDevicesSettingsSheet.swift
-// Purpose: Native inset-grouped device management sheet with per-device menu
-//          visibility toggles and an add-connection row.
+// Purpose: Native inset-grouped connections sheet with switcher visibility,
+//          per-device controls, and an add-connection row.
 // Layer: View
 // Exports: MyDevicesSettingsSheet
 // Depends on: SwiftUI, CodexService, MyDevicesPresentation, RemodexIcon
@@ -22,6 +22,8 @@ struct MyDevicesSettingsSheet: View {
     @State private var pendingForgetDeviceId: String?
     @State private var pendingSwitchDeviceId: String?
     @State private var visibilityPreferenceRevision = 0
+    @AppStorage(MyDeviceSwitcherVisibilityStore.key)
+    private var switcherModeRawValue = MyDeviceSwitcherVisibilityStore.defaultMode.rawValue
 
     private var devices: [MyDeviceRowModel] {
         // Re-read UserDefaults-backed visibility after toggles without moving the setting into view state.
@@ -41,6 +43,18 @@ struct MyDevicesSettingsSheet: View {
                 }
 
                 Section {
+                    Picker("Show switcher", selection: switcherModeBinding) {
+                        ForEach(MyDeviceSwitcherVisibilityMode.allCases) { mode in
+                            Text(mode.title)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                } footer: {
+                    Text("Automatic hides the sidebar switcher when only one visible device is paired.")
+                }
+
+                Section("Devices") {
                     if devices.isEmpty {
                         Text("No paired devices yet.")
                             .font(AppFont.subheadline())
@@ -70,7 +84,7 @@ struct MyDevicesSettingsSheet: View {
             }
             .listStyle(.insetGrouped)
             .font(AppFont.body())
-            .navigationTitle("Devices")
+            .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -103,43 +117,44 @@ struct MyDevicesSettingsSheet: View {
                 Button("Cancel", role: .cancel, action: cancelPendingForget)
             },
             message: {
-                Text("The paired device will be removed from this iPhone.")
+                Text("The paired device will be removed from this iPhone. Scan its QR code again to reconnect.")
             }
         )
     }
 
     @ViewBuilder
     private func deviceRow(_ device: MyDeviceRowModel) -> some View {
-        HStack(spacing: 12) {
-            deviceIconBadge(for: device)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                deviceIconBadge(for: device)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(device.primaryName)
-                    .font(AppFont.body())
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                if !device.menuSubtitle.isEmpty {
-                    Text(device.menuSubtitle)
-                        .font(AppFont.caption())
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(device.primaryName)
+                        .font(AppFont.body())
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+
+                    if !device.menuSubtitle.isEmpty {
+                        Text(device.menuSubtitle)
+                            .font(AppFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 14) {
+                    forgetDeviceButton(for: device)
+                    deviceSelectionControl(for: device)
                 }
             }
 
-            Spacer(minLength: 8)
-
-            HStack(spacing: 14) {
-                Toggle(
-                    "",
-                    isOn: toggleBinding(for: device)
-                )
-                .labelsHidden()
-
-                deviceSelectionControl(for: device)
-            }
+            Toggle("Show in sidebar switcher", isOn: toggleBinding(for: device))
+                .font(AppFont.caption())
+                .disabled(isSwitchingMac)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -186,6 +201,30 @@ struct MyDevicesSettingsSheet: View {
                 updateMenuVisibility(isOn, for: device)
             }
         )
+    }
+
+    private var switcherModeBinding: Binding<MyDeviceSwitcherVisibilityMode> {
+        Binding(
+            get: {
+                MyDeviceSwitcherVisibilityMode(rawValue: switcherModeRawValue)
+                    ?? MyDeviceSwitcherVisibilityStore.defaultMode
+            },
+            set: { mode in
+                switcherModeRawValue = mode.rawValue
+            }
+        )
+    }
+
+    private func forgetDeviceButton(for device: MyDeviceRowModel) -> some View {
+        Button(role: .destructive) {
+            pendingForgetDeviceId = device.deviceId
+        } label: {
+            RemodexIcon.image(systemName: "trash", size: 16, weight: .semibold)
+        }
+        .foregroundStyle(Color.red)
+        .buttonStyle(.plain)
+        .disabled(isSwitchingMac)
+        .accessibilityLabel("Forget device")
     }
 
     private var switchingOverlay: some View {

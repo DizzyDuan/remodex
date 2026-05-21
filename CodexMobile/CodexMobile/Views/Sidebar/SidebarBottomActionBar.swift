@@ -1,6 +1,6 @@
 // FILE: SidebarBottomActionBar.swift
 // Purpose: Bottom-anchored sidebar bar. Hosts (from leading to trailing) the
-//          circular devices menu, the Terminal pill, and the primary Chat
+//          optional circular devices menu, the Terminal pill, and the primary Chat
 //          pill. Pills are built from the same reusable `SidebarActionPill`
 //          component so they share font, icon size, padding and capsule shape
 //          — only the style differs. The devices menu reuses the sidebar's
@@ -15,6 +15,10 @@
 import SwiftUI
 
 struct SidebarBottomActionBar: View {
+    @Environment(CodexService.self) private var codex
+    @AppStorage(MyDeviceSwitcherVisibilityStore.key)
+    private var switcherModeRawValue = MyDeviceSwitcherVisibilityStore.defaultMode.rawValue
+
     let isChatEnabled: Bool
     let isCreatingThread: Bool
     let isSwitchingMac: Bool
@@ -49,6 +53,24 @@ struct SidebarBottomActionBar: View {
             onSelectDevice: onSelectTrustedDevice,
             onOpenDevicesSettings: onOpenDevicesSettings
         )
+    }
+
+    private var shouldShowDevicesMenu: Bool {
+        let visibleDeviceCount = MyDevicesPresentation
+            .rowModels(from: codex, switchingDeviceId: switchingMacDeviceId)
+            .filter(\.isVisibleInMenu)
+            .count
+
+        let switcherMode = MyDeviceSwitcherVisibilityMode(rawValue: switcherModeRawValue)
+            ?? MyDeviceSwitcherVisibilityStore.defaultMode
+        switch switcherMode {
+        case .automatic:
+            return isSwitchingMac || visibleDeviceCount > 1
+        case .always:
+            return isSwitchingMac || visibleDeviceCount > 0
+        case .hidden:
+            return isSwitchingMac
+        }
     }
 
     private var terminalPill: SidebarActionPill {
@@ -96,7 +118,9 @@ struct SidebarBottomActionBar: View {
 
     private var pillRow: some View {
         HStack(spacing: 10) {
-            devicesMenu
+            if shouldShowDevicesMenu {
+                devicesMenu
+            }
             terminalPill
             Spacer(minLength: 0)
             chatPill
@@ -116,5 +140,6 @@ struct SidebarBottomActionBar: View {
         onSelectTrustedDevice: { _ in },
         onOpenDevicesSettings: {}
     )
+    .environment(CodexService())
 }
 #endif
