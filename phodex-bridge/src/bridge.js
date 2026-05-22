@@ -69,6 +69,10 @@ const {
   readThreadTurnsListPageFromSessionJsonl,
 } = require("./session-jsonl-history");
 const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
+const {
+  createRuntimeProviderRouter,
+  stripRuntimeProviderFieldsForCodex,
+} = require("./runtime-provider-router");
 
 const execFileAsync = promisify(execFile);
 const RELAY_WATCHDOG_PING_INTERVAL_MS = 10_000;
@@ -243,6 +247,12 @@ function startBridge({
     appPath: config.codexAppPath,
     logPrefix: "[remodex]",
   });
+  const runtimeProviderRouter = createRuntimeProviderRouter({
+    sendApplicationResponse,
+    sendCodexRequest,
+    sendRuntimeMessage: (message) => sendRuntimeApplicationMessage("cursor", message),
+    logPrefix: "[remodex]",
+  });
   const voiceHandler = createVoiceHandler({
     sendCodexRequest,
     logPrefix: "[remodex]",
@@ -320,6 +330,7 @@ function startBridge({
     clearReconnectTimer();
     clearRelayWatchdog();
     bridgeStatusPublisher.stopHeartbeat();
+    runtimeProviderRouter.shutdown();
     stopContextUsageWatcher();
     rolloutLiveMirror?.stopAll();
     desktopIpcActionFollower?.stopAll();
@@ -589,10 +600,15 @@ function startBridge({
     if (desktopIpcActionFollower?.observeInbound(rawMessage)) {
       return;
     }
+    if (runtimeProviderRouter.handleApplicationMessage(rawMessage)) {
+      return;
+    }
     if (handleBridgeManagedThreadTurnsListRequest(rawMessage, sendApplicationResponse)) {
       return;
     }
-    const codexRequest = disableUnsupportedReasoningSummaryForTurnStart(rawMessage);
+    const codexRequest = stripRuntimeProviderFieldsForCodex(
+      disableUnsupportedReasoningSummaryForTurnStart(rawMessage)
+    );
     rememberForwardedRequestMethod(rawMessage);
     rememberThreadFromMessage("phone", codexRequest);
     codex.send(codexRequest);
@@ -600,6 +616,17 @@ function startBridge({
 
   // Encrypts bridge-generated responses instead of letting the relay see plaintext.
   function sendApplicationResponse(rawMessage) {
+    secureTransport.queueOutboundApplicationMessage(
+      sanitizeRelayBoundCodexMessage(rawMessage),
+      sendRelayWireMessage
+    );
+  }
+
+  // Provider output keeps the same desktop refresh, push, and secure relay side effects as Codex output.
+  function sendRuntimeApplicationMessage(provider, rawMessage) {
+    desktopRefresher.handleOutbound(rawMessage);
+    pushNotificationTracker.handleOutbound(rawMessage);
+    rememberThreadFromMessage(provider, rawMessage);
     secureTransport.queueOutboundApplicationMessage(
       sanitizeRelayBoundCodexMessage(rawMessage),
       sendRelayWireMessage

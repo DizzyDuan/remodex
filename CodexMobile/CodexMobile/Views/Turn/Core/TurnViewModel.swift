@@ -1375,10 +1375,13 @@ final class TurnViewModel {
             defer { isSending = false }
 
             do {
+                let draftRuntimeOverride = codex.threadRuntimeOverride(for: draftThreadID)
                 let thread = try await codex.startThreadIfReady(
                     preferredProjectPath: preferredProjectPath,
-                    rootlessChatPromptHint: rootlessChatPromptHint
+                    rootlessChatPromptHint: rootlessChatPromptHint,
+                    runtimeOverride: draftRuntimeOverride
                 )
+                codex.applyThreadRuntimeOverride(nil, to: draftThreadID)
                 let preAppendedMessage = movePreAppendedNewThreadUserMessageIfNeeded(
                     draftPreAppendedMessage,
                     pendingSend: pendingSend,
