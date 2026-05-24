@@ -37,9 +37,15 @@ function parseSessionJsonlMetadata(content) {
   let threadId = "";
   let cwd = "";
 
-  const lines = String(content || "").split(/\r?\n/);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
+  const raw = String(content || "");
+  let lineStart = 0;
+  while (lineStart < raw.length) {
+    let lineEnd = raw.indexOf("\n", lineStart);
+    if (lineEnd === -1) {
+      lineEnd = raw.length;
+    }
+    const line = raw.substring(lineStart, lineEnd).trim();
+    lineStart = lineEnd + 1;
     if (!line) {
       continue;
     }
@@ -81,9 +87,17 @@ function parseSessionJsonlTurns(content, { threadId = "" } = {}) {
   const toolCallsByCallId = new Map();
   const pendingUserMessages = [];
 
-  const lines = String(content || "").split(/\r?\n/);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
+  const raw = String(content || "");
+  let index = -1;
+  let lineStart = 0;
+  while (lineStart < raw.length) {
+    index += 1;
+    let lineEnd = raw.indexOf("\n", lineStart);
+    if (lineEnd === -1) {
+      lineEnd = raw.length;
+    }
+    const line = raw.substring(lineStart, lineEnd).trim();
+    lineStart = lineEnd + 1;
     if (!line) {
       continue;
     }
