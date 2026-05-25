@@ -38,6 +38,9 @@ struct CodexMobileApp: App {
                 }
                 .onOpenURL { url in
                     Task { @MainActor in
+                        guard !routeRemodexDeepLink(url) else {
+                            return
+                        }
                         guard CodexService.legacyGPTLoginCallbackEnabled else {
                             return
                         }
@@ -56,6 +59,33 @@ struct CodexMobileApp: App {
                     TurnCacheManager.resetAll()
                 }
         }
+    }
+
+    @discardableResult
+    private func routeRemodexDeepLink(_ url: URL) -> Bool {
+        guard url.scheme?.caseInsensitiveCompare("phodex") == .orderedSame else {
+            return false
+        }
+
+        let threadId: String?
+        if url.host?.caseInsensitiveCompare("thread") == .orderedSame {
+            threadId = url.pathComponents.dropFirst().first
+        } else if url.host?.isEmpty != false,
+                  url.pathComponents.dropFirst().first?.caseInsensitiveCompare("thread") == .orderedSame {
+            threadId = url.pathComponents.dropFirst(2).first
+        } else {
+            threadId = nil
+        }
+
+        let decodedThreadId = threadId?.removingPercentEncoding ?? threadId
+        guard let normalizedThreadId = decodedThreadId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalizedThreadId.isEmpty else {
+            return false
+        }
+
+        codexService.handleNotificationOpen(threadId: normalizedThreadId, turnId: nil)
+        return true
     }
 
     // Configures RevenueCat once at launch using the client-safe public SDK key.
