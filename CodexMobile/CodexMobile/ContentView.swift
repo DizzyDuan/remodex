@@ -6,7 +6,6 @@
 
 import SwiftUI
 import UIKit
-import ActivityKit
 
 private enum RootSheetRoute: Identifiable, Equatable {
     case bridgeUpdate(CodexBridgeUpdatePrompt)
@@ -86,11 +85,6 @@ struct ContentView: View {
     @State private var isShowingSettingsCover = false
     @State private var isShowingDevicesSettingsSheet = false
     @State private var displayIslandCoordinator = RemodexDisplayIslandCoordinator()
-    @State private var displayIslandCompletedBanners: [CodexThreadCompletionBanner] = []
-    @State private var displayIslandFailedBanners: [CodexThreadCompletionBanner] = []
-    @State private var displayIslandLastRunningThreadIDs: Set<String> = []
-    @State private var displayIslandLastTerminalStatesByThread: [String: CodexTurnTerminalState] = [:]
-    @State private var displayIslandRunningStartedAtByThread: [String: Date] = [:]
     @AppStorage("codex.hasSeenOnboarding") private var hasSeenOnboarding = false
     @AppStorage("codex.whatsNew.lastPresentedVersion") private var lastPresentedWhatsNewVersion = ""
 
@@ -235,7 +229,7 @@ struct ContentView: View {
                 resetSavedMacWakeRecoveryState()
             }
             .onChange(of: codex.threadCompletionBanner) { _, banner in
-                rememberDisplayIslandCompletion(from: banner)
+                displayIslandCoordinator.rememberCompletion(from: banner, codex: codex)
                 scheduleThreadCompletionBannerDismiss(for: banner)
                 syncDisplayIsland()
             }
@@ -2011,8 +2005,7 @@ struct ContentView: View {
     private func openCompletedThreadFromBanner(_ banner: CodexThreadCompletionBanner) {
         threadCompletionBannerDismissTask?.cancel()
         codex.threadCompletionBanner = nil
-        displayIslandCompletedBanners.removeAll { $0.threadId == banner.threadId }
-        displayIslandFailedBanners.removeAll { $0.threadId == banner.threadId }
+        clearDisplayIslandOutcome(for: banner.threadId)
         syncDisplayIsland()
 
         guard let thread = codex.threads.first(where: { $0.id == banner.threadId }) else {
@@ -2024,216 +2017,26 @@ struct ContentView: View {
 
     private func dismissThreadCompletionBanner() {
         if let banner = codex.threadCompletionBanner {
-            displayIslandCompletedBanners.removeAll { $0.threadId == banner.threadId }
-            displayIslandFailedBanners.removeAll { $0.threadId == banner.threadId }
+            clearDisplayIslandOutcome(for: banner.threadId)
         }
         threadCompletionBannerDismissTask?.cancel()
         codex.threadCompletionBanner = nil
         syncDisplayIsland()
     }
 
-    private func rememberDisplayIslandCompletion(from banner: CodexThreadCompletionBanner?) {
-        guard let banner else {
-            return
-        }
-
-        rememberDisplayIslandCompletion(threadId: banner.threadId, title: banner.title)
-    }
-
-    private func rememberDisplayIslandCompletion(threadId: String, title: String? = nil) {
-        let resolvedTitle = title
-            ?? codex.threads.first(where: { $0.id == threadId })?.displayTitle
-            ?? CodexThread.defaultDisplayTitle
-        let banner = CodexThreadCompletionBanner(threadId: threadId, title: resolvedTitle)
-
-        displayIslandFailedBanners.removeAll { $0.threadId == banner.threadId }
-        displayIslandCompletedBanners.removeAll { $0.threadId == banner.threadId }
-        displayIslandCompletedBanners.insert(banner, at: 0)
-        if displayIslandCompletedBanners.count > 3 {
-            displayIslandCompletedBanners = Array(displayIslandCompletedBanners.prefix(3))
-        }
-    }
-
-    private func rememberDisplayIslandFailure(threadId: String, title: String? = nil) {
-        let resolvedTitle = title
-            ?? codex.threads.first(where: { $0.id == threadId })?.displayTitle
-            ?? CodexThread.defaultDisplayTitle
-        let banner = CodexThreadCompletionBanner(threadId: threadId, title: resolvedTitle)
-
-        displayIslandCompletedBanners.removeAll { $0.threadId == banner.threadId }
-        displayIslandFailedBanners.removeAll { $0.threadId == banner.threadId }
-        displayIslandFailedBanners.insert(banner, at: 0)
-        if displayIslandFailedBanners.count > 3 {
-            displayIslandFailedBanners = Array(displayIslandFailedBanners.prefix(3))
-        }
-    }
-
     private func clearDisplayIslandOutcome(for threadId: String) {
-        displayIslandCompletedBanners.removeAll { $0.threadId == threadId }
-        displayIslandFailedBanners.removeAll { $0.threadId == threadId }
-        displayIslandLastTerminalStatesByThread[threadId] = codex.latestTurnTerminalState(for: threadId)
+        displayIslandCoordinator.clearOutcome(
+            for: threadId,
+            terminalState: codex.latestTurnTerminalState(for: threadId)
+        )
     }
 
     private func syncDisplayIsland() {
-        reconcileDisplayIslandCompletions()
-        let snapshot = displayIslandSnapshot()
-        Task {
-            await displayIslandCoordinator.sync(snapshot: snapshot)
-        }
-    }
-
-    private func reconcileDisplayIslandCompletions() {
-        let currentRunningIDs = displayIslandCurrentRunningThreadIDs()
-        let visibleThreadIDs = displayIslandVisibleThreadIDs()
-        let completedIDs = displayIslandLastRunningThreadIDs
-            .intersection(visibleThreadIDs)
-            .subtracting(currentRunningIDs)
-        let terminalStates = codex.latestTurnTerminalStateByThread
-        let now = Date()
-
-        for threadId in currentRunningIDs {
-            if displayIslandRunningStartedAtByThread[threadId] == nil {
-                displayIslandRunningStartedAtByThread[threadId] = now
-            }
-        }
-        displayIslandRunningStartedAtByThread = displayIslandRunningStartedAtByThread.filter { threadId, _ in
-            currentRunningIDs.contains(threadId) && visibleThreadIDs.contains(threadId)
-        }
-
-        displayIslandCompletedBanners.removeAll { banner in
-            !visibleThreadIDs.contains(banner.threadId)
-                || currentRunningIDs.contains(banner.threadId)
-                || codex.latestTurnTerminalState(for: banner.threadId) == .failed
-                || codex.latestTurnTerminalState(for: banner.threadId) == .stopped
-        }
-        displayIslandFailedBanners.removeAll { banner in
-            !visibleThreadIDs.contains(banner.threadId)
-                || currentRunningIDs.contains(banner.threadId)
-                || codex.latestTurnTerminalState(for: banner.threadId) == .completed
-                || codex.latestTurnTerminalState(for: banner.threadId) == .stopped
-        }
-
-        for threadId in completedIDs {
-            let terminalState = codex.latestTurnTerminalState(for: threadId)
-            if terminalState == .failed {
-                rememberDisplayIslandFailure(threadId: threadId)
-                continue
-            }
-            guard terminalState != .stopped else {
-                continue
-            }
-            rememberDisplayIslandCompletion(threadId: threadId)
-        }
-
-        let visibleTerminalStates = terminalStates.filter { threadId, _ in
-            visibleThreadIDs.contains(threadId) && !currentRunningIDs.contains(threadId)
-        }
-        for (threadId, terminalState) in visibleTerminalStates {
-            guard displayIslandLastTerminalStatesByThread[threadId] != terminalState else {
-                continue
-            }
-
-            switch terminalState {
-            case .completed:
-                rememberDisplayIslandCompletion(threadId: threadId)
-            case .failed:
-                rememberDisplayIslandFailure(threadId: threadId)
-            case .stopped:
-                clearDisplayIslandOutcome(for: threadId)
-            }
-        }
-
-        displayIslandLastRunningThreadIDs = currentRunningIDs.intersection(visibleThreadIDs)
-        displayIslandLastTerminalStatesByThread = terminalStates.filter { threadId, _ in
-            visibleThreadIDs.contains(threadId) && !currentRunningIDs.contains(threadId)
-        }
-    }
-
-    private func displayIslandSnapshot() -> RemodexDisplayIslandSnapshot {
-        let runningIDs = displayIslandCurrentRunningThreadIDs()
-        let runningConversations = runningIDs
-            .compactMap { threadId in
-                displayIslandConversation(
-                    threadId: threadId,
-                    state: displayIslandRunningState(for: threadId),
-                    runningStartedAt: displayIslandRunningStartedAtByThread[threadId]
-                )
-            }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-
-        let completedConversations = displayIslandCompletedBanners.compactMap { banner in
-            displayIslandConversation(threadId: banner.threadId, fallbackTitle: banner.title, state: "Ready")
-        }
-        let failedConversations = displayIslandFailedBanners.compactMap { banner in
-            displayIslandConversation(threadId: banner.threadId, fallbackTitle: banner.title, state: "Failed")
-        }
-
-        return RemodexDisplayIslandSnapshot(
-            runningConversations: Array(runningConversations.prefix(3)),
-            completedConversations: Array(completedConversations.prefix(3)),
-            failedConversations: Array(failedConversations.prefix(3))
-        )
-    }
-
-    private func displayIslandCurrentRunningThreadIDs() -> Set<String> {
-        codex.runningThreadIDs
-            .union(Set(codex.activeTurnIdByThread.keys))
-            .intersection(displayIslandVisibleThreadIDs())
-    }
-
-    private func displayIslandVisibleThreadIDs() -> Set<String> {
-        Set(codex.threads.map(\.id))
+        displayIslandCoordinator.sync(codex: codex)
     }
 
     private var displayIslandTimelineFingerprint: String {
-        displayIslandCurrentRunningThreadIDs()
-            .sorted()
-            .map { threadId in
-                let snapshot = codex.timelineState(for: threadId).renderSnapshot
-                return "\(threadId):\(snapshot.timelineChangeToken):\(displayIslandRunningState(for: threadId))"
-            }
-            .joined(separator: "|")
-    }
-
-    private func displayIslandRunningState(for threadId: String) -> String {
-        let messages = codex.timelineState(for: threadId).renderSnapshot.messages
-        let isFinalAnswerStreaming = messages.contains { message in
-            message.role == .assistant
-                && message.kind == .chat
-                && message.isStreaming
-                && message.assistantPhase == "final_answer"
-                && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
-        return isFinalAnswerStreaming ? "Finishing" : "Running"
-    }
-
-    private func displayIslandConversation(
-        threadId: String,
-        fallbackTitle: String? = nil,
-        state: String,
-        runningStartedAt: Date? = nil
-    ) -> RemodexDisplayIslandConversation? {
-        let thread = codex.threads.first { $0.id == threadId }
-        let rawTitle = thread?.displayTitle ?? fallbackTitle ?? CodexThread.defaultDisplayTitle
-        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let detail = displayIslandDetail(for: thread)
-
-        return RemodexDisplayIslandConversation(
-            id: threadId,
-            title: title.isEmpty ? CodexThread.defaultDisplayTitle : title,
-            detail: detail,
-            state: state,
-            runningStartedAt: runningStartedAt
-        )
-    }
-
-    private func displayIslandDetail(for thread: CodexThread?) -> String {
-        guard let cwd = thread?.cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty else {
-            return "Remodex"
-        }
-
-        let lastPathComponent = URL(fileURLWithPath: cwd).lastPathComponent
-        return lastPathComponent.isEmpty ? "Remodex" : lastPathComponent
+        displayIslandCoordinator.timelineFingerprint(codex: codex)
     }
 
     // Keeps selected thread coherent with server list updates.
@@ -2416,84 +2219,6 @@ private struct HorizontalRevealViewportShape: Shape {
             height: rect.height + (verticalOverflow * 2)
         )
         return Path(expandedRect)
-    }
-}
-
-private struct RemodexDisplayIslandSnapshot: Equatable {
-    let runningConversations: [RemodexDisplayIslandConversation]
-    let completedConversations: [RemodexDisplayIslandConversation]
-    let failedConversations: [RemodexDisplayIslandConversation]
-
-    var isEmpty: Bool {
-        runningConversations.isEmpty && completedConversations.isEmpty && failedConversations.isEmpty
-    }
-}
-
-@MainActor
-private final class RemodexDisplayIslandCoordinator {
-    private var activityID: String?
-    private var lastSnapshot: RemodexDisplayIslandSnapshot?
-
-    func sync(snapshot: RemodexDisplayIslandSnapshot) async {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
-            await endAllActivities()
-            lastSnapshot = nil
-            return
-        }
-
-        guard !snapshot.isEmpty else {
-            await endAllActivities()
-            lastSnapshot = nil
-            return
-        }
-
-        guard snapshot != lastSnapshot || currentActivity == nil else {
-            return
-        }
-
-        let content = ActivityContent(
-            state: RemodexDisplayIslandAttributes.ContentState(
-                runningConversations: snapshot.runningConversations,
-                completedConversations: snapshot.completedConversations,
-                failedConversations: snapshot.failedConversations,
-                updatedAt: Date()
-            ),
-            staleDate: Date().addingTimeInterval(30 * 60)
-        )
-
-        if let activity = currentActivity {
-            await activity.update(content)
-            activityID = activity.id
-        } else {
-            do {
-                let activity = try Activity<RemodexDisplayIslandAttributes>.request(
-                    attributes: RemodexDisplayIslandAttributes(title: "Remodex"),
-                    content: content,
-                    pushType: nil
-                )
-                activityID = activity.id
-            } catch {
-                activityID = nil
-            }
-        }
-
-        lastSnapshot = snapshot
-    }
-
-    private var currentActivity: Activity<RemodexDisplayIslandAttributes>? {
-        if let activityID,
-           let matchingActivity = Activity<RemodexDisplayIslandAttributes>.activities.first(where: { $0.id == activityID }) {
-            return matchingActivity
-        }
-
-        return Activity<RemodexDisplayIslandAttributes>.activities.first
-    }
-
-    private func endAllActivities() async {
-        for activity in Activity<RemodexDisplayIslandAttributes>.activities {
-            await activity.end(nil, dismissalPolicy: .immediate)
-        }
-        activityID = nil
     }
 }
 
