@@ -288,7 +288,7 @@ test("runCli prints expected failures without a Node stack trace", async () => {
   assert.equal(messages.join("\n").includes("at "), false);
 });
 
-test("remodex status --json exposes daemon metadata for companion apps", async () => {
+test("remodex status --json exposes daemon metadata without relay URLs", async () => {
   const writes = [];
   const originalWrite = process.stdout.write;
 
@@ -318,6 +318,8 @@ test("remodex status --json exposes daemon metadata for companion apps", async (
           return {
             daemonConfig: {
               relayUrl: "ws://127.0.0.1:9000/relay",
+              pushServiceUrl: "https://push.example",
+              keepMacAwakeEnabled: true,
             },
             bridgeStatus: {
               connectionStatus: "connected",
@@ -327,7 +329,10 @@ test("remodex status --json exposes daemon metadata for companion apps", async (
               pairingPayload: {
                 relay: "ws://127.0.0.1:9000/relay",
                 sessionId: "session-json",
+                macIdentityPublicKey: "pub-key-json",
+                expiresAt: 1_900_000_000_000,
               },
+              pairingCode: "ABCDEFGHJK",
             },
           };
         },
@@ -342,7 +347,19 @@ test("remodex status --json exposes daemon metadata for companion apps", async (
 
   const payload = JSON.parse(writes.join("").trim());
   assert.equal(payload.currentVersion, version);
-  assert.equal(payload.daemonConfig?.relayUrl, "ws://127.0.0.1:9000/relay");
+  assert.equal(payload.daemonConfig?.relayUrl, undefined);
+  assert.equal(payload.daemonConfig?.pushServiceUrl, undefined);
+  assert.equal(payload.daemonConfig?.relayConfigured, true);
+  assert.equal(payload.daemonConfig?.pushServiceConfigured, true);
+  assert.equal(payload.daemonConfig?.keepMacAwakeEnabled, true);
   assert.equal(payload.bridgeStatus?.connectionStatus, "connected");
-  assert.equal(payload.pairingSession?.pairingPayload?.sessionId, "session-json");
+  assert.equal(payload.pairingSession?.pairingPayload?.relay, undefined);
+  assert.equal(payload.pairingSession?.pairingPayload?.sessionId, undefined);
+  assert.equal(payload.pairingSession?.pairingPayload?.macIdentityPublicKey, undefined);
+  assert.equal(payload.pairingSession?.pairingPayload?.hasRelay, true);
+  assert.equal(payload.pairingSession?.pairingPayload?.hasSessionId, true);
+  assert.equal(payload.pairingSession?.pairingPayload?.hasMacIdentityPublicKey, true);
+  assert.equal(payload.pairingSession?.pairingPayload?.expiresAt, 1_900_000_000_000);
+  assert.equal(writes.join("").includes("ws://127.0.0.1:9000/relay"), false);
+  assert.equal(writes.join("").includes("session-json"), false);
 });
