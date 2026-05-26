@@ -1326,6 +1326,49 @@ final class TurnTimelineReducerTests: XCTestCase {
         XCTAssertEqual(messageIDs, ["status", "final"])
     }
 
+    func testTimelineRenderProjectionDoesNotCollapseCommentaryOnlyTurn() {
+        let now = Date()
+        let messages = [
+            makeMessage(
+                id: "user",
+                threadID: "thread",
+                role: .user,
+                text: "Check this",
+                createdAt: now,
+                turnID: "turn-1",
+                orderIndex: 1
+            ),
+            makeMessage(
+                id: "commentary-1",
+                threadID: "thread",
+                role: .assistant,
+                assistantPhase: "commentary",
+                text: "I am checking the files.",
+                createdAt: now.addingTimeInterval(1),
+                turnID: "turn-1",
+                orderIndex: 2
+            ),
+            makeMessage(
+                id: "commentary-2",
+                threadID: "thread",
+                role: .assistant,
+                assistantPhase: "commentary",
+                text: "The dirty set is small.",
+                createdAt: now.addingTimeInterval(2),
+                turnID: "turn-1",
+                orderIndex: 3
+            ),
+        ]
+
+        let items = TurnTimelineRenderProjection.project(
+            messages: messages,
+            completedTurnIDs: ["turn-1"],
+            isThreadRunning: true
+        )
+
+        XCTAssertEqual(items.map(\.id), ["user", "commentary-1", "commentary-2"])
+    }
+
     func testRemoveDuplicateAssistantMessagesByTurnAndText() {
         let now = Date()
         let messages = [

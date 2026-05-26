@@ -7,6 +7,7 @@
 const net = require("net");
 const os = require("os");
 const path = require("path");
+const { buildApplyPatchFileChangeItem } = require("./apply-patch-changes");
 
 const FRAME_HEADER_BYTES = 4;
 const MAX_FRAME_BYTES = 256 * 1024 * 1024;
@@ -60,6 +61,7 @@ function createDesktopIpcActionFollower({
   });
   const rawStatesByThreadId = new Map();
   const assistantMessageTextsByThreadId = new Map();
+  const mirroredActivityKeysByThreadId = new Map();
   const mirroredUserMessageKeysByThreadId = new Map();
   const activeDesktopTurnsByThreadId = new Map();
   const pendingRoutesByRequestId = new Map();
@@ -93,6 +95,7 @@ function createDesktopIpcActionFollower({
   function stopAll() {
     rawStatesByThreadId.clear();
     assistantMessageTextsByThreadId.clear();
+    mirroredActivityKeysByThreadId.clear();
     mirroredUserMessageKeysByThreadId.clear();
     clearAllDesktopTurnCompletionTimers();
     pendingRoutesByRequestId.clear();
@@ -143,13 +146,14 @@ function createDesktopIpcActionFollower({
     }
 
     rawStatesByThreadId.set(threadId, nextState);
-    syncProjectedAssistantDeltas(threadId, previousState, nextState);
+    syncProjectedLiveState(threadId, previousState, nextState);
     syncProjectedActions(threadId, projectPendingDesktopActions(threadId, nextState));
   }
 
   function onDisconnect() {
     rawStatesByThreadId.clear();
     assistantMessageTextsByThreadId.clear();
+    mirroredActivityKeysByThreadId.clear();
     mirroredUserMessageKeysByThreadId.clear();
     clearAllDesktopTurnCompletionTimers();
     pendingRoutesByRequestId.clear();
@@ -288,8 +292,13 @@ function createDesktopIpcActionFollower({
     }
 
     rawStatesByThreadId.set(threadId, nextState);
-    syncProjectedAssistantDeltas(threadId, baselineState, nextState);
+    syncProjectedLiveState(threadId, baselineState, nextState);
     syncProjectedActions(threadId, projectPendingDesktopActions(threadId, nextState));
+  }
+
+  function syncProjectedLiveState(threadId, previousState, nextState) {
+    syncProjectedAssistantDeltas(threadId, previousState, nextState);
+    syncProjectedDesktopActivities(threadId, nextState);
   }
 
   function syncProjectedAssistantDeltas(threadId, previousState, nextState) {
@@ -337,11 +346,53 @@ function createDesktopIpcActionFollower({
     syncProjectedDesktopTurnCompletions(threadId, nextState);
   }
 
+  function syncProjectedDesktopActivities(threadId, nextState) {
+    refreshTrackedDesktopTurnState(threadId, nextState);
+    const activityKeys = mirroredActivityKeysForThread(threadId);
+    const notifications = projectDesktopActivityNotifications(threadId, nextState, activityKeys);
+    if (notifications.length === 0) {
+      syncProjectedDesktopTurnCompletions(threadId, nextState);
+      return;
+    }
+
+    const activeActivityTurnIds = new Set(
+      notifications
+        .map((notification) => readString(notification?.params?.turnId) || readString(notification?.params?.turn_id))
+        .filter(Boolean)
+    );
+    const userNotifications = projectDesktopUserMessageNotifications(
+      threadId,
+      nextState,
+      mirroredUserMessageKeysForThread(threadId),
+      activeActivityTurnIds
+    );
+
+    // Tool-call snapshots are independent from assistant text deltas. Emit them
+    // through the same app-server event names rollout mirroring uses so iOS keeps
+    // showing active tool rows while the Mac-owned run is still executing.
+    for (const notification of [...userNotifications, ...notifications]) {
+      sendApplicationResponse(JSON.stringify(notification));
+    }
+    for (const turnId of activeActivityTurnIds) {
+      noteDesktopIpcTurnActivity(threadId, turnId, nextState);
+    }
+    syncProjectedDesktopTurnCompletions(threadId, nextState);
+  }
+
   function mirroredUserMessageKeysForThread(threadId) {
     let keys = mirroredUserMessageKeysByThreadId.get(threadId);
     if (!keys) {
       keys = new Set();
       mirroredUserMessageKeysByThreadId.set(threadId, keys);
+    }
+    return keys;
+  }
+
+  function mirroredActivityKeysForThread(threadId) {
+    let keys = mirroredActivityKeysByThreadId.get(threadId);
+    if (!keys) {
+      keys = new Set();
+      mirroredActivityKeysByThreadId.set(threadId, keys);
     }
     return keys;
   }
@@ -375,7 +426,8 @@ function createDesktopIpcActionFollower({
         return;
       }
 
-      if (hasOpenDesktopRequestForTurn(currentEntry.latestState, turnId)) {
+      if (hasOpenDesktopRequestForTurn(currentEntry.latestState, turnId)
+        || hasActiveDesktopActivityForTurn(currentEntry.latestState, turnId)) {
         scheduleDesktopIpcTurnIdleCompletion(threadId, turnId, currentEntry);
         return;
       }
@@ -782,6 +834,144 @@ function projectDesktopUserMessageNotifications(
   return notifications;
 }
 
+function projectDesktopActivityNotifications(threadId, conversationState, mirroredKeys = new Set()) {
+  const turns = Array.isArray(conversationState?.turns) ? conversationState.turns : [];
+  const notifications = [];
+
+  for (const turn of turns) {
+    const turnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
+    if (!turnId || (
+      !hasActiveDesktopActivityForTurn(conversationState, turnId)
+      && !isDesktopTurnLive(turn, conversationState)
+      && !hasMirroredActivityOutputPending(turn, mirroredKeys)
+    )) {
+      continue;
+    }
+
+    const items = Array.isArray(turn?.items) ? turn.items : [];
+    const callsById = new Map();
+    for (const item of items) {
+      if (isDesktopActivityCallItem(item)) {
+        const callId = desktopActivityCallId(item);
+        if (callId) {
+          callsById.set(callId, item);
+        }
+      }
+    }
+
+    for (const item of items) {
+      if (isDesktopActivityCallItem(item)) {
+        notifications.push(...projectDesktopActivityBeginNotifications(threadId, turnId, item, mirroredKeys));
+      } else if (isDesktopActivityOutputItem(item)) {
+        const callId = desktopActivityCallId(item);
+        notifications.push(...projectDesktopActivityOutputNotifications(
+          threadId,
+          turnId,
+          item,
+          callsById.get(callId),
+          mirroredKeys
+        ));
+      }
+    }
+  }
+
+  return notifications;
+}
+
+function projectDesktopActivityBeginNotifications(threadId, turnId, item, mirroredKeys) {
+  const callId = desktopActivityCallId(item);
+  const toolName = readString(item?.name) || readString(item?.toolName) || readString(item?.tool_name);
+  if (!callId || !toolName || !markMirroredActivityKey(mirroredKeys, turnId, callId, "begin")) {
+    return [];
+  }
+
+  if (isCommandToolName(toolName)) {
+    const argumentsObject = parseToolArguments(item?.arguments);
+    return [createDesktopIpcNotification("codex/event/exec_command_begin", {
+      threadId,
+      turnId,
+      call_id: callId,
+      command: resolveToolCommand(toolName, argumentsObject),
+      cwd: resolveToolWorkingDirectory(argumentsObject, item),
+      status: "running",
+    })];
+  }
+
+  if (toolName === "apply_patch") {
+    const isCompletedPatch = Boolean(terminalStatusFromObject(item));
+    const fileChange = buildApplyPatchFileChangeItem({
+      callId,
+      patch: readString(item?.input) || readString(item?.arguments),
+      status: readString(item?.status) || (isCompletedPatch ? "completed" : "inProgress"),
+      idFallback: buildSyntheticActivityItemId("file-change", threadId, turnId, callId),
+      cwd: readString(item?.cwd) || readString(item?.workdir),
+    });
+    if (fileChange) {
+      return [createDesktopIpcNotification(
+        isCompletedPatch ? "codex/event/patch_apply_end" : "codex/event/patch_apply_begin",
+        {
+          threadId,
+          turnId,
+          id: turnId,
+          call_id: callId,
+          itemId: fileChange.id,
+          status: fileChange.status,
+          ...(isCompletedPatch ? { success: true } : {}),
+          changes: fileChange.changes,
+        }
+      )];
+    }
+  }
+
+  return [createDesktopIpcNotification("codex/event/background_event", {
+    threadId,
+    turnId,
+    call_id: callId,
+    message: genericToolActivityMessage(toolName),
+  })];
+}
+
+function projectDesktopActivityOutputNotifications(threadId, turnId, item, callItem, mirroredKeys) {
+  const callId = desktopActivityCallId(item);
+  const toolName = readString(callItem?.name) || readString(callItem?.toolName) || readString(callItem?.tool_name);
+  if (!callId || !toolName || !mirroredKeys.has(activityMirrorKey(turnId, callId, "begin"))) {
+    return [];
+  }
+  if (!markMirroredActivityKey(mirroredKeys, turnId, callId, "output")) {
+    return [];
+  }
+
+  if (!isCommandToolName(toolName)) {
+    return [];
+  }
+
+  const argumentsObject = parseToolArguments(callItem?.arguments);
+  const command = resolveToolCommand(toolName, argumentsObject);
+  const cwd = resolveToolWorkingDirectory(argumentsObject, callItem);
+  const output = readString(item?.output) || readString(item?.text) || readString(item?.content);
+  const notifications = [];
+  if (output) {
+    notifications.push(createDesktopIpcNotification("codex/event/exec_command_output_delta", {
+      threadId,
+      turnId,
+      call_id: callId,
+      command,
+      cwd,
+      chunk: output,
+    }));
+  }
+  notifications.push(createDesktopIpcNotification("codex/event/exec_command_end", {
+    threadId,
+    turnId,
+    call_id: callId,
+    command,
+    cwd,
+    status: "completed",
+    output: output || "",
+  }));
+  return notifications;
+}
+
 function projectDesktopTurnCompletedNotifications(
   threadId,
   conversationState,
@@ -796,6 +986,11 @@ function projectDesktopTurnCompletedNotifications(
   for (const turn of turns) {
     const turnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
     if (!turnId || !trackedTurnIds.has(turnId)) {
+      continue;
+    }
+    // Terminal snapshots can race active tool rows. Keep tracking the turn until
+    // the activity itself closes, otherwise the phone may stay running forever.
+    if (hasActiveDesktopActivityForTurn(conversationState, turnId)) {
       continue;
     }
     if (!isDesktopTurnTerminal(turn, conversationState)) {
@@ -900,6 +1095,33 @@ function userMessageKey(turnId, itemId, text) {
     .slice(0, 16)}`;
 }
 
+function markMirroredActivityKey(mirroredKeys, turnId, callId, phase) {
+  const key = activityMirrorKey(turnId, callId, phase);
+  if (mirroredKeys.has(key)) {
+    return false;
+  }
+  mirroredKeys.add(key);
+  return true;
+}
+
+function activityMirrorKey(turnId, callId, phase) {
+  return `${turnId}:${callId}:${phase}`;
+}
+
+function hasMirroredActivityOutputPending(turn, mirroredKeys) {
+  const turnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  return items.some((item) => {
+    if (!isDesktopActivityOutputItem(item)) {
+      return false;
+    }
+    const callId = desktopActivityCallId(item);
+    return callId
+      && mirroredKeys.has(activityMirrorKey(turnId, callId, "begin"))
+      && !mirroredKeys.has(activityMirrorKey(turnId, callId, "output"));
+  });
+}
+
 function isDesktopTurnTerminal(turn, conversationState) {
   if (desktopTerminalStatus(turn, conversationState)) {
     return true;
@@ -910,6 +1132,17 @@ function isDesktopTurnTerminal(turn, conversationState) {
       hasExplicitFalseFlag(conversationState, ["running", "isRunning", "streaming", "isStreaming"])
       && !hasOpenDesktopRequestForTurn(conversationState, readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id))
     );
+}
+
+function isDesktopTurnLive(turn, conversationState) {
+  return hasExplicitTrueFlag(turn, ["running", "isRunning", "streaming", "isStreaming"])
+    || hasExplicitTrueFlag(conversationState, ["running", "isRunning", "streaming", "isStreaming"])
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(turn?.status)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(turn?.state)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(turn?.phase)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(conversationState?.status)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(conversationState?.state)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(conversationState?.phase)));
 }
 
 function desktopTerminalStatus(turn, conversationState) {
@@ -995,6 +1228,24 @@ function hasExplicitFalseFlag(value, keys) {
   return keys.some((key) => Object.prototype.hasOwnProperty.call(value, key) && value[key] === false);
 }
 
+function hasExplicitTrueFlag(value, keys) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  return keys.some((key) => Object.prototype.hasOwnProperty.call(value, key) && value[key] === true);
+}
+
+const ACTIVE_STATUS_TOKENS = new Set([
+  "running",
+  "streaming",
+  "inprogress",
+  "inflight",
+  "started",
+  "pending",
+  "active",
+]);
+
 function hasOpenDesktopRequestForTurn(conversationState, turnId) {
   if (!turnId) {
     return false;
@@ -1015,6 +1266,103 @@ function hasOpenDesktopRequestForTurn(conversationState, turnId) {
       || readString(request.turn_id);
     return requestTurnId === turnId;
   });
+}
+
+function hasActiveDesktopActivityForTurn(conversationState, turnId) {
+  const turn = desktopTurnById(conversationState, turnId);
+  const items = Array.isArray(turn?.items) ? turn.items : [];
+  const completedActivityIds = completedDesktopActivityIds(items);
+  return items.some((item) => isActiveDesktopActivityItem(item, completedActivityIds));
+}
+
+function desktopTurnById(conversationState, turnId) {
+  if (!turnId) {
+    return null;
+  }
+
+  const turns = Array.isArray(conversationState?.turns) ? conversationState.turns : [];
+  return turns.find((turn) => {
+    const candidateTurnId = readString(turn?.id) || readString(turn?.turnId) || readString(turn?.turn_id);
+    return candidateTurnId === turnId;
+  }) || null;
+}
+
+function isActiveDesktopActivityItem(item, completedActivityIds = new Set()) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return false;
+  }
+  if (!isDesktopActivityItem(item) || isDesktopActivityOutputItem(item) || terminalStatusFromObject(item)) {
+    return false;
+  }
+  if (hasExplicitTrueFlag(item, ["running", "isRunning", "streaming", "isStreaming"])
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(item.status)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(item.state)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(item.phase)))
+    || ACTIVE_STATUS_TOKENS.has(normalizeToken(readString(item.lifecycle)))) {
+    return true;
+  }
+
+  // Codex Desktop often represents a live tool as a bare function_call/custom_tool_call
+  // with only call_id, then appends a separate *_output item. Treat the call as active
+  // until that output appears, even when no explicit "running" status is present.
+  const activityId = desktopActivityCallId(item);
+  return isDesktopActivityCallItem(item) && activityId && !completedActivityIds.has(activityId);
+}
+
+function isDesktopActivityItem(item) {
+  const type = normalizeToken(item?.type);
+  return type.includes("tool")
+    || type.includes("command")
+    || type.includes("exec")
+    || type.includes("mcp")
+    || type.includes("function");
+}
+
+function isDesktopActivityCallItem(item) {
+  const type = normalizeToken(item?.type);
+  if (isDesktopActivityOutputItem(item)) {
+    return false;
+  }
+  return type.endsWith("call")
+    || type.includes("toolcall")
+    || type.includes("functioncall")
+    || type.includes("commandexecution")
+    || type.includes("localshellcall");
+}
+
+function isDesktopActivityOutputItem(item) {
+  const type = normalizeToken(item?.type);
+  return type.includes("output")
+    || type.includes("result")
+    || type.endsWith("end")
+    || type.includes("completed");
+}
+
+function completedDesktopActivityIds(items) {
+  const ids = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    if (!isDesktopActivityOutputItem(item) && !terminalStatusFromObject(item)) {
+      continue;
+    }
+    const id = desktopActivityCallId(item);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function desktopActivityCallId(item) {
+  return readString(item?.call_id)
+    || readString(item?.callId)
+    || readString(item?.tool_call_id)
+    || readString(item?.toolCallId)
+    || readString(item?.requestId)
+    || readString(item?.request_id)
+    || readString(item?.id);
 }
 
 function isUserMessageItem(item) {
@@ -1213,6 +1561,68 @@ function requestIdKey(value) {
   return "";
 }
 
+function parseToolArguments(rawArguments) {
+  const parsed = safeParseJSON(rawArguments);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function resolveToolCommand(toolName, argumentsObject) {
+  if (!isCommandToolName(toolName)) {
+    return toolName;
+  }
+
+  return readString(argumentsObject.cmd)
+    || readString(argumentsObject.command)
+    || readString(argumentsObject.raw_command)
+    || readString(argumentsObject.rawCommand)
+    || toolName;
+}
+
+function resolveToolWorkingDirectory(argumentsObject, item = {}) {
+  return readString(argumentsObject.workdir)
+    || readString(argumentsObject.cwd)
+    || readString(argumentsObject.working_directory)
+    || readString(item?.cwd)
+    || readString(item?.workdir)
+    || "";
+}
+
+function isCommandToolName(toolName) {
+  const normalized = readString(toolName).toLowerCase();
+  return normalized === "exec_command"
+    || normalized === "shell_command"
+    || normalized.endsWith(".exec_command")
+    || normalized.endsWith(".shell_command");
+}
+
+function genericToolActivityMessage(toolName) {
+  switch (readString(toolName).toLowerCase()) {
+  case "apply_patch":
+    return "Applying patch";
+  case "write_stdin":
+    return "Writing to terminal";
+  case "read_thread_terminal":
+    return "Reading terminal output";
+  default:
+    return `Running ${toolName}`;
+  }
+}
+
+function buildSyntheticActivityItemId(kind, threadId, turnId, callId) {
+  return `${kind}:${threadId}:${turnId}:${callId}`;
+}
+
+function createDesktopIpcNotification(method, params = {}) {
+  return {
+    method,
+    params: {
+      remodexDesktopMirror: true,
+      remodexDesktopIpcMirror: true,
+      ...params,
+    },
+  };
+}
+
 function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
@@ -1239,7 +1649,9 @@ module.exports = {
   applyConversationStateChange,
   createDesktopIpcActionFollower,
   desktopFollowerPayloadForResponse,
+  hasActiveDesktopActivityForTurn,
   projectDesktopAssistantDeltaNotifications,
+  projectDesktopActivityNotifications,
   projectDesktopTurnCompletedNotifications,
   projectDesktopUserMessageNotifications,
   projectPendingDesktopActions,

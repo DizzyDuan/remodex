@@ -467,6 +467,134 @@ test("bridge forwards live desktop assistant deltas to the phone", async (t) => 
   assert.ok(relayMessages.indexOf(deltaMessage) < relayMessages.indexOf(completedMessage));
 });
 
+test("bridge forwards live desktop IPC tool calls to the phone", async (t) => {
+  const { tempDir, socketPath: ipcSocketPath } = createIpcTestSocket("remodex-bridge-ipc-tools-");
+  const relayServer = new WebSocket.Server({ port: 0 });
+  const relayMessages = [];
+  let relaySocket = null;
+  let ipcServerSocket = null;
+  let bridge = null;
+
+  await new Promise((resolve) => relayServer.once("listening", resolve));
+  relayServer.on("connection", (socket) => {
+    relaySocket = socket;
+    socket.on("message", (data) => {
+      const parsed = safeParseJSON(data.toString("utf8"));
+      if (parsed) {
+        relayMessages.push(parsed);
+      }
+    });
+  });
+
+  const ipcServer = net.createServer((socket) => {
+    ipcServerSocket = socket;
+    attachFrameReader(socket, (frame) => {
+      if (frame.method === "initialize") {
+        writeFrame(socket, {
+          type: "response",
+          requestId: frame.requestId,
+          resultType: "success",
+          method: "initialize",
+          handledByClientId: "desktop",
+          result: { clientId: "desktop-test" },
+        });
+      }
+    });
+  });
+  await new Promise((resolve) => ipcServer.listen(ipcSocketPath, resolve));
+
+  const { startBridge } = loadBridgeWithTestDoubles({
+    createCodexTransportImpl() {
+      return createFakeCodexTransport();
+    },
+  });
+
+  t.after(() => {
+    bridge?.stop();
+    relaySocket?.close();
+    relayServer.close();
+    ipcServer.close();
+    ipcServerSocket?.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  bridge = startBridge({
+    printPairingQr: false,
+    config: {
+      relayUrl: `ws://127.0.0.1:${relayServer.address().port}`,
+      pushServiceUrl: "",
+      pushPreviewMaxChars: 160,
+      refreshEnabled: false,
+      refreshDebounceMs: 1,
+      keepMacAwakeEnabled: false,
+      codexEndpoint: "",
+      refreshCommand: "",
+      codexBundleId: "",
+      codexAppPath: "",
+      desktopIpcSocketPath: ipcSocketPath,
+    },
+  });
+
+  await waitFor(() => relaySocket && relaySocket.readyState === WebSocket.OPEN);
+  relaySocket.send(JSON.stringify({
+    id: "resume-from-phone",
+    method: "thread/resume",
+    params: { threadId: "thread-ipc-tool" },
+  }));
+
+  await waitFor(() => ipcServerSocket, 2_000);
+  writeFrame(ipcServerSocket, {
+    type: "broadcast",
+    method: "thread-stream-state-changed",
+    sourceClientId: "desktop",
+    version: 1,
+    params: {
+      conversationId: "thread-ipc-tool",
+      change: {
+        type: "snapshot",
+        conversationState: {
+          turns: [{
+            id: "turn-ipc-tool",
+            status: "running",
+            items: [{
+              id: "user-ipc-tool",
+              type: "user_message",
+              text: "Run git status",
+            }, {
+              id: "call-ipc-tool",
+              type: "function_call",
+              call_id: "call-ipc-tool",
+              name: "exec_command",
+              arguments: JSON.stringify({ cmd: "git status", workdir: "/repo" }),
+            }],
+          }],
+        },
+      },
+    },
+  });
+
+  const userMessage = await waitForMessage(
+    relayMessages,
+    (message) => message.method === "codex/event/user_message"
+  );
+  const toolMessage = await waitForMessage(
+    relayMessages,
+    (message) => message.method === "codex/event/exec_command_begin"
+  );
+
+  assert.ok(relayMessages.indexOf(userMessage) < relayMessages.indexOf(toolMessage));
+  assert.deepEqual(toolMessage.params, {
+    threadId: "thread-ipc-tool",
+    turnId: "turn-ipc-tool",
+    call_id: "call-ipc-tool",
+    command: "git status",
+    cwd: "/repo",
+    status: "running",
+    remodexDesktopMirror: true,
+    remodexDesktopIpcMirror: true,
+  });
+});
+
 // Loads bridge.js with plaintext test transports while leaving the production module untouched.
 function loadBridgeWithTestDoubles({ createCodexTransportImpl }) {
   const bridgePath = require.resolve("../src/bridge");
