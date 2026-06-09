@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remodex Live Viewer</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div class="title-group">
+          <div class="app-title" data-i18n="appTitle">Remodex</div>
+        </div>
+        <div class="header-actions">
+          <button class="icon-button" id="alwaysOnTopButton" type="button" title="Always on top" aria-label="Always on top" aria-pressed="true">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 2.75 4.25 6.5h2.25v3.75h3V6.5h2.25L8 2.75Z"></path>
+              <path d="M4.5 13.25h7"></path>
+            </svg>
+          </button>
+          <button class="icon-button" id="hideButton" type="button" title="Hide" aria-label="Hide">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4.25 4.25 11.75 11.75M11.75 4.25 4.25 11.75"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <nav class="thread-tabs" id="threadTabs" aria-label="Active threads"></nav>
+
+      <section class="message-list" id="messageList" aria-live="polite">
+        <div class="empty-state" id="emptyState">Waiting for local activity</div>
+      </section>
+
+      <footer class="footer">
+        <button class="footer-button" id="followButton" type="button" title="Stop following">Stop following</button>
+      </footer>
+    </main>
+
+    <script src="./i18n.js"></script>
+    <script src="./renderer-state.js"></script>
+    <script src="./renderer-scroll.js"></script>
+    <script src="./window-controls.js"></script>
+    <script src="./thread-tabs.js"></script>
+    <script src="./message-list.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

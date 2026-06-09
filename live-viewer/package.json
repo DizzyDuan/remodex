@@ -1,0 +1,26 @@
+{
+  "name": "remodex-live-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Remodex live viewer companion window for Codex.app",
+  "main": "src/main.js",
+  "bin": {
+    "live-viewer": "bin/live-viewer.js"
+  },
+  "scripts": {
+    "start": "electron .",
+    "service:install": "node bin/live-viewer.js install",
+    "service:uninstall": "node bin/live-viewer.js uninstall",
+    "service:enable": "node bin/live-viewer.js enable",
+    "service:disable": "node bin/live-viewer.js disable",
+    "service:start": "node bin/live-viewer.js start",
+    "service:stop": "node bin/live-viewer.js stop",
+    "service:show": "node bin/live-viewer.js show",
+    "service:hide": "node bin/live-viewer.js hide",
+    "service:status": "node bin/live-viewer.js status",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7"
+  }
+}
