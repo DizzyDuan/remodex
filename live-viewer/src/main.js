@@ -1,8 +1,4 @@
 const { app, ipcMain, nativeTheme } = require("electron");
-const {
-  sessionActivityKey,
-  shouldAutoShowForSession,
-} = require("./auto-show-controller");
 const { readCodexPreferences } = require("./codex-preferences-reader");
 const { loadConfig, saveConfig } = require("./config");
 const { registerIpcHandlers } = require("./ipc-handlers");
@@ -10,6 +6,7 @@ const { createLanguageController } = require("./language-controller");
 const { createSessionWatcher } = require("./session-watcher");
 const { createThemeController } = require("./theme-controller");
 const { createViewerWindow } = require("./viewer-window");
+const { createWindowStartController } = require("./window-start-controller");
 
 let config = null;
 let mainWindow = null;
@@ -17,12 +14,10 @@ let latestSessionState = emptySessionState();
 let sessionWatcher = null;
 let themeController = null;
 let languageController = null;
+let windowStartController = null;
 let latestLocale = "en-US";
 let latestTheme = "dark";
 let startedAtMs = Date.now();
-let lastAutoShowAtMs = 0;
-let lastAutoShowActivityKey = "";
-let lastManualHideAtMs = 0;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -60,12 +55,21 @@ function startApp() {
   latestLocale = languageController.getLocale();
   latestTheme = themeController.getTheme();
 
-  mainWindow = createViewerWindow(config);
+  windowStartController = createWindowStartController({
+    config,
+    startedAtMs,
+    precreateWindow: true,
+    createWindow: () => {
+      mainWindow = createViewerWindow(config);
+      return mainWindow;
+    },
+  });
+
   if (hasArg(process.argv, "--show") || config.autoShow?.showOnLogin === true) {
-    mainWindow.showInactive();
+    windowStartController.showExistingWindow();
   }
   if (hasArg(process.argv, "--hide")) {
-    mainWindow.hide();
+    windowStartController.hideExistingWindow();
   }
   registerHandlers();
   startSessionWatcher();
@@ -80,14 +84,14 @@ function registerHandlers() {
   registerIpcHandlers({
     app,
     ipcMain,
-    getWindow: () => mainWindow,
+    getWindow: () => windowStartController?.getWindow() || null,
     getConfig: () => config,
     getInitialSession: () => latestSessionState,
     getTheme: () => themeController.getTheme(),
     getLocale: () => latestLocale,
     saveWindowPosition,
     saveAlwaysOnTop,
-    onManualHide,
+    onManualHide: () => windowStartController?.onManualHide(),
   });
 }
 
@@ -116,57 +120,21 @@ function startSessionWatcher() {
     config,
     onState(state) {
       latestSessionState = state;
-      sendToRenderer("session", state);
-      maybeAutoShowForSession(state);
+      windowStartController.handleSessionState(state);
     },
   });
   sessionWatcher.start();
 }
 
-function maybeAutoShowForSession(state) {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-
-  const nowMs = Date.now();
-  if (!shouldAutoShowForSession({
-    state,
-    config,
-    startedAtMs,
-    lastAutoShowAtMs,
-    lastAutoShowActivityKey,
-    lastManualHideAtMs,
-    nowMs,
-  })) {
-    return;
-  }
-
-  lastAutoShowAtMs = nowMs;
-  lastAutoShowActivityKey = sessionActivityKey(state);
-  mainWindow.showInactive();
-}
-
-function onManualHide() {
-  lastManualHideAtMs = Date.now();
-}
-
-function showExistingWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  mainWindow.showInactive();
-}
-
 function handleWindowCommand(commandLine = []) {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  if (!windowStartController) {
     return;
   }
   if (hasArg(commandLine, "--hide")) {
-    mainWindow.hide();
-    onManualHide();
+    windowStartController.hideExistingWindow();
     return;
   }
-  showExistingWindow();
+  windowStartController.showExistingWindow();
 }
 
 function hasArg(argv, flag) {
@@ -174,10 +142,7 @@ function hasArg(argv, flag) {
 }
 
 function sendToRenderer(channel, payload) {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  mainWindow.webContents.send(`viewer:${channel}`, payload);
+  windowStartController?.sendToRenderer(channel, payload);
 }
 
 function cleanup() {
