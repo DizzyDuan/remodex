@@ -70,6 +70,31 @@ If you scan the pairing QR with a generic camera or QR reader before installing 
 6. The bridge handles git operations and local session persistence on your Mac
 7. `Codex.app` can read the same thread history from disk, but it is not a true live mirror unless you enable the optional refresh workaround
 
+## Live Viewer
+
+This repo also includes [Remodex Live Viewer](live-viewer/), an optional local-first Electron companion window for recent Codex conversations.
+
+Live Viewer reads local Remodex and Codex session state from disk, shows recent threads in a compact always-available window, and stays independent from Codex.app. It does not modify Codex.app, inject into Codex pages, or require a hosted service.
+
+Run it directly:
+
+```sh
+cd live-viewer
+npm install
+npm start
+```
+
+Or install its independent macOS LaunchAgent:
+
+```sh
+cd live-viewer
+npm link
+live-viewer install
+live-viewer enable
+```
+
+See [live-viewer/README.md](live-viewer/README.md) for configuration, CLI commands, and development notes.
+
 ## Repository Structure
 
 This repo contains the local bridge, the iOS app target, and their tests:
@@ -87,6 +112,7 @@ This repo contains the local bridge, the iOS app target, and their tests:
 │   ├── CodexMobileTests/         # Unit tests
 │   ├── CodexMobileUITests/       # UI tests
 │   └── BuildSupport/             # Info.plist, xcconfig defaults, and local override templates
+├── live-viewer/                  # Optional local Electron companion window for recent Codex threads
 ```
 
 ## Prerequisites
