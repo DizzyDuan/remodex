@@ -26,6 +26,7 @@ function createThreadState(threadId, timestamp = Date.now()) {
     indexTitle: "",
     sortRank: Number.MAX_SAFE_INTEGER,
     hasReadSnapshot: false,
+    mobileOriginated: false,
   };
 }
 
@@ -72,7 +73,29 @@ function updateMetadataFromEvent(event) {
     title,
     fallbackTitle: canCarryTitle ? titleFromCwd(payload.cwd) : "",
     taskStatus: taskStatusFromEventType(payload.type || payload.event_type || event?.type),
+    ...(isMobileOriginatedEvent(event) ? { mobileOriginated: true } : {}),
   };
+}
+
+function isMobileOriginatedEvent(event) {
+  if (event?.type !== "session_meta") {
+    return false;
+  }
+  const payload = event?.payload || {};
+  return isMobileOriginValue(payload.originator)
+    || isMobileOriginValue(payload.thread_source)
+    || isMobileOriginValue(payload.source);
+}
+
+function isMobileOriginValue(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.toLowerCase();
+  return normalized.includes("codexmobile")
+    || normalized.includes("remodex")
+    || normalized.includes("iphone")
+    || normalized.includes("ios");
 }
 
 function taskStatusFromEventType(type) {

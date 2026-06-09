@@ -82,6 +82,9 @@ function updateThreadMetadata(thread, line, { updateTaskStatus = true } = {}) {
   if (metadata.taskStatus && updateTaskStatus) {
     thread.taskStatus = metadata.taskStatus;
   }
+  if (metadata.mobileOriginated) {
+    thread.mobileOriginated = true;
+  }
 }
 
 function appendItems(thread, nextItems) {

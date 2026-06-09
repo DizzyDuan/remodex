@@ -24,6 +24,7 @@ function createSessionWatcher({
   let intervalId = null;
   let fileChangeWatcher = null;
   let latestThreadId = "";
+  let activeThreadId = "";
   let activeSource = "";
   let activeUpdatedAt = "";
   let activeUpdatedAtMs = 0;
@@ -81,6 +82,7 @@ function createSessionWatcher({
   function syncRecentThreads(activeThread) {
     const recentSessions = readRecentSessions();
     const recentThreadIds = new Set(recentSessions.map((session) => session.threadId));
+    activeThreadId = activeThread.threadId || "";
     activeSource = activeThread.source || "";
     activeUpdatedAt = activeThread.updatedAt || "";
     activeUpdatedAtMs = activeThread.updatedAtMs || 0;
@@ -159,7 +161,11 @@ function createSessionWatcher({
       .map((thread) => serializeThread(thread, now()))
       .sort((a, b) => a.sortRank - b.sortRank || b.lastActivityAt - a.lastActivityAt);
     const activeThread = threadStates.get(latestThreadId);
+    const activeHintThread = threadStates.get(activeThreadId);
     const active = activeThread ? serializeThread(activeThread, now()) : null;
+    const effectiveActiveSource = activeSource === "codex" && activeHintThread?.mobileOriginated
+      ? "phone"
+      : activeSource;
 
     onState({
       status: aggregateStatus(threads),
@@ -167,7 +173,7 @@ function createSessionWatcher({
       threads,
       threadId: active?.threadId || "",
       title: active?.title || "",
-      activeSource,
+      activeSource: effectiveActiveSource,
       activeUpdatedAt,
       activeUpdatedAtMs,
       taskStatus: active?.taskStatus || "idle",

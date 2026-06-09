@@ -32,6 +32,48 @@ test("readActiveThread returns thread id, explicit local title, source, and upda
   });
 });
 
+test("session watcher treats codex activity from a mobile-originated rollout as phone activity", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-live-viewer-mobile-origin-"));
+  const lastThread = path.join(dir, "last-thread.json");
+  const sessionsRoot = path.join(dir, "sessions");
+  const dayDir = path.join(sessionsRoot, "2026", "06", "09");
+  const threadId = "thread-mobile-origin";
+  fs.mkdirSync(dayDir, { recursive: true });
+  fs.writeFileSync(lastThread, JSON.stringify({
+    threadId,
+    source: "codex",
+    updatedAt: "2026-06-09T09:00:00.000Z",
+  }));
+  fs.writeFileSync(path.join(dayDir, `rollout-2026-06-09T09-00-00-${threadId}.jsonl`), [
+    JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id: threadId,
+        originator: "codexmobile_ios",
+        source: "vscode",
+      },
+    }),
+    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "From phone" } }),
+  ].join("\n") + "\n");
+
+  const states = [];
+  const watcher = createSessionWatcher({
+    config: {
+      pollMs: 500,
+      paths: { lastThread, sessionsRoot },
+    },
+    now: () => Date.parse("2026-06-09T09:00:01.000Z"),
+    onState: (state) => states.push(state),
+  });
+
+  watcher.tick();
+
+  const state = states.at(-1);
+  assert.equal(state.threadId, threadId);
+  assert.equal(state.activeSource, "phone");
+  assert.equal(state.activeUpdatedAt, "2026-06-09T09:00:00.000Z");
+});
+
 test("metadata helpers derive fallback title and task status", () => {
   assert.equal(titleFromCwd("/Users/dizzy/Project/remodex/live-viewer"), "live viewer");
   assert.equal(titleFromItems([
